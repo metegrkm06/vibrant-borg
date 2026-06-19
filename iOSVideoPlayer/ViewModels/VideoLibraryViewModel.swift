@@ -83,6 +83,7 @@ class VideoLibraryViewModel: ObservableObject {
                 
                 var scannedVideos: [Video] = []
                 let favs = self.favoriteIDs
+                let cacheURL = self.fileManager.urls(for: .cachesDirectory, in: .userDomainMask)[0]
                 
                 for url in videoURLs {
                     let filename = url.lastPathComponent
@@ -96,11 +97,15 @@ class VideoLibraryViewModel: ObservableObject {
                     let duration = asset.duration.seconds
                     let isFav = favs.contains(filename)
                     
+                    // Try to load cached thumbnail from Caches directory
+                    let thumbURL = cacheURL.appendingPathComponent(filename + ".jpg")
+                    let cachedImage = UIImage(contentsOfFile: thumbURL.path)
+                    
                     let video = Video(
                         id: UUID(),
                         url: url,
                         title: title,
-                        thumbnail: nil,
+                        thumbnail: cachedImage,
                         duration: duration.isNaN ? 0 : duration,
                         dateAdded: dateAdded,
                         fileSize: fileSize,
@@ -113,7 +118,7 @@ class VideoLibraryViewModel: ObservableObject {
                 DispatchQueue.main.async {
                     self.videos = scannedVideos
                     self.isLoading = false
-                    // Start generating thumbnails for scanned videos
+                    // Start generating thumbnails for scanned videos that lack them
                     self.generateThumbnails()
                 }
                 
@@ -128,6 +133,8 @@ class VideoLibraryViewModel: ObservableObject {
     
     // Generates 1:1 ratio thumbnails asynchronously using AVAssetImageGenerator
     func generateThumbnails() {
+        let cacheURL = fileManager.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+        
         for index in 0..<videos.count {
             let video = videos[index]
             guard video.thumbnail == nil else { continue }
@@ -140,10 +147,19 @@ class VideoLibraryViewModel: ObservableObject {
             // Capture frame from the first second or half-duration of the video
             let time = CMTime(seconds: min(1.0, video.duration / 2), preferredTimescale: 600)
             
+            let filename = video.url.lastPathComponent
+            let thumbURL = cacheURL.appendingPathComponent(filename + ".jpg")
+            
             imageGenerator.generateCGImagesAsynchronously(forTimes: [NSValue(time: time)]) { [weak self] _, image, _, result, _ in
                 guard let self = self, result == .succeeded, let image = image else { return }
                 
                 let uiImage = UIImage(cgImage: image)
+                
+                // Write image data to caches directory
+                if let jpegData = uiImage.jpegData(compressionQuality: 0.85) {
+                    try? jpegData.write(to: thumbURL)
+                }
+                
                 DispatchQueue.main.async {
                     if index < self.videos.count && self.videos[index].url == video.url {
                         self.videos[index].thumbnail = uiImage
@@ -179,6 +195,11 @@ class VideoLibraryViewModel: ObservableObject {
             var favs = favoriteIDs
             favs.remove(filename)
             favoriteIDs = favs
+            
+            // Delete cached thumbnail if it exists
+            let cacheURL = fileManager.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+            let thumbURL = cacheURL.appendingPathComponent(filename + ".jpg")
+            try? fileManager.removeItem(at: thumbURL)
         } catch {
             print("Error deleting video file: \(error)")
         }
