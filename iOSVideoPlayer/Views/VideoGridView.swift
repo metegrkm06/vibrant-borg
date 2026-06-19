@@ -103,7 +103,7 @@ struct VideoGridView: View {
                             Button(role: .destructive, action: {
                                 viewModel.deleteVideo(at: video.url)
                             }) {
-                                Label("Delete Video", systemName: "trash")
+                                Label("Delete Video", systemImage: "trash")
                             }
                         }
                         .onTapGesture {
