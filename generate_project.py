@@ -34,6 +34,7 @@ CONFIG_DEBUG_PROJ = make_id()
 CONFIG_REL_PROJ   = make_id()
 CONFIG_DEBUG_TGT  = make_id()
 CONFIG_REL_TGT    = make_id()
+PRODUCTS_GROUP_ID = make_id()
 
 # Build file section
 build_files = "\n".join(
@@ -101,11 +102,11 @@ pbxproj = f"""// !$*UTF8*$!
 \t\t\tisa = PBXGroup;
 \t\t\tchildren = (
 \t\t\t\t{GROUP_ID} /* iOSVideoPlayer */,
-\t\t\t\t{TARGET_ID}PRODUCT /* Products */,
+\t\t\t\t{PRODUCTS_GROUP_ID} /* Products */,
 \t\t\t);
 \t\t\tsourceTree = "<group>";
 \t\t}};
-\t\t{TARGET_ID}PRODUCT /* Products */ = {{
+\t\t{PRODUCTS_GROUP_ID} /* Products */ = {{
 \t\t\tisa = PBXGroup;
 \t\t\tchildren = (
 \t\t\t\t{TARGET_ID}PRODUCT /* iOSVideoPlayer.app */,
@@ -156,7 +157,7 @@ pbxproj = f"""// !$*UTF8*$!
 \t\t\t\tBase,
 \t\t\t);
 \t\t\tmainGroup = {PROJECT_ID}MAINGROUP;
-\t\t\tproductRefGroup = {TARGET_ID}PRODUCT /* Products */;
+\t\t\tproductRefGroup = {PRODUCTS_GROUP_ID} /* Products */;
 \t\t\tprojectDirPath = "";
 \t\t\tprojectRoot = "";
 \t\t\ttargets = (
