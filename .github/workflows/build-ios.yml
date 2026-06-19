@@ -16,10 +16,8 @@ jobs:
       - name: Show Xcode Version
         run: xcodebuild -version
 
-      - name: Install XcodeGen and ldid
-        run: |
-          brew install xcodegen
-          brew install ldid
+      - name: Install XcodeGen
+        run: brew install xcodegen
 
       - name: Generate Xcode Project
         run: xcodegen generate --spec project.yml --project .
@@ -31,7 +29,7 @@ jobs:
             -scheme iOSVideoPlayer \
             -clonedSourcePackagesDirPath .spm-cache
 
-      - name: Build App (Release, no signing)
+      - name: Build App
         run: |
           xcodebuild clean build \
             -project iOSVideoPlayer.xcodeproj \
@@ -49,44 +47,40 @@ jobs:
       - name: Find .app Bundle
         run: |
           APP_PATH=$(find "$RUNNER_TEMP/build" -name "iOSVideoPlayer.app" -type d | head -1)
-          echo "Found app at: $APP_PATH"
+          echo "Found: $APP_PATH"
           echo "APP_PATH=$APP_PATH" >> $GITHUB_ENV
 
-      - name: Ad-hoc Sign Binary with ldid
-        # ldid -S applies a fake/self code signature that LiveContainer and dyld can map
-        # This is the standard approach for sideloaded apps needing a minimal signature
+      - name: Ad-hoc Sign with codesign
+        # Use macOS built-in codesign with '-' identity for ad-hoc signature
+        # This stamps a minimal fake signature so LiveContainer's dyld can map the binary
         run: |
           BINARY="$APP_PATH/iOSVideoPlayer"
-          echo "Signing binary at: $BINARY"
+          echo "Binary: $BINARY"
           
-          # Write a minimal entitlements plist so ldid has something to embed
-          cat > /tmp/entitlements.plist << 'EOF'
-          <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-          <plist version="1.0">
-          <dict>
-            <key>get-task-allow</key>
-            <true/>
-            <key>application-identifier</key>
-            <string>com.vibrantborg.iosvideoplayer</string>
-          </dict>
-          </plist>
-          EOF
+          # Write entitlements plist
+          cat > /tmp/ent.plist << 'ENTEOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>get-task-allow</key>
+  <true/>
+  <key>application-identifier</key>
+  <string>com.vibrantborg.iosvideoplayer</string>
+</dict>
+</plist>
+ENTEOF
           
-          # Apply fake signature using ldid
-          ldid -S/tmp/entitlements.plist "$BINARY"
-          echo "Ad-hoc signature applied successfully"
-          
-          # Verify the signature was embedded
-          file "$BINARY"
-          otool -l "$BINARY" | grep -A2 "LC_CODE_SIGNATURE" || echo "No LC_CODE_SIGNATURE found (may still work)"
+          # Ad-hoc sign: '-' means self-signed / no identity
+          codesign --force --sign - --entitlements /tmp/ent.plist --timestamp=none "$BINARY"
+          echo "codesign result: $?"
+          codesign -dvvv "$BINARY" 2>&1 | head -20
 
       - name: Package IPA
         run: |
           mkdir -p Payload
           cp -r "$APP_PATH" Payload/
           zip -r iOSVideoPlayer.ipa Payload
-          echo "IPA created:"
           ls -lh iOSVideoPlayer.ipa
 
       - name: Upload IPA Artifact
