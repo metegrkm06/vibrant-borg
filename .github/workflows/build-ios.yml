@@ -50,31 +50,12 @@ jobs:
           echo "Found: $APP_PATH"
           echo "APP_PATH=$APP_PATH" >> $GITHUB_ENV
 
-      - name: Ad-hoc Sign with codesign
-        # Use macOS built-in codesign with '-' identity for ad-hoc signature
-        # This stamps a minimal fake signature so LiveContainer's dyld can map the binary
+      - name: Ad-hoc Sign Binary with codesign
         run: |
           BINARY="$APP_PATH/iOSVideoPlayer"
-          echo "Binary: $BINARY"
-          
-          # Write entitlements plist
-          cat > /tmp/ent.plist << 'ENTEOF'
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>get-task-allow</key>
-  <true/>
-  <key>application-identifier</key>
-  <string>com.vibrantborg.iosvideoplayer</string>
-</dict>
-</plist>
-ENTEOF
-          
-          # Ad-hoc sign: '-' means self-signed / no identity
-          codesign --force --sign - --entitlements /tmp/ent.plist --timestamp=none "$BINARY"
-          echo "codesign result: $?"
-          codesign -dvvv "$BINARY" 2>&1 | head -20
+          echo "Signing: $BINARY"
+          codesign --force --sign - --entitlements entitlements.plist --timestamp=none "$BINARY"
+          codesign -dv "$BINARY" 2>&1 || true
 
       - name: Package IPA
         run: |
