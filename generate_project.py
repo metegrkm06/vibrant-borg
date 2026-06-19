@@ -15,8 +15,8 @@ swift_files = []
 for root, dirs, files in os.walk(sources_dir):
     for f in files:
         if f.endswith(".swift"):
-            rel = os.path.relpath(os.path.join(root, f)).replace("\\", "/")
-            swift_files.append((f, rel))
+            path_in_group = os.path.relpath(os.path.join(root, f), sources_dir).replace("\\", "/")
+            swift_files.append((f, path_in_group))
 
 # Generate UUIDs
 PROJECT_ID     = make_id()
@@ -43,8 +43,8 @@ build_files = "\n".join(
 
 # File reference section
 file_refs = "\n".join(
-    f"\t\t{fid} /* {name} */ = {{isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = \"{name}\"; sourceTree = \"<group>\"; }};"
-    for (name, _), fid in zip(swift_files, FILE_REF_IDS)
+    f"\t\t{fid} /* {name} */ = {{isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = \"{path}\"; sourceTree = \"<group>\"; }};"
+    for (name, path), fid in zip(swift_files, FILE_REF_IDS)
 )
 
 # Info.plist ref
