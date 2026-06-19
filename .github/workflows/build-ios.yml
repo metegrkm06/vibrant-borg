@@ -16,11 +16,13 @@ jobs:
       - name: Show Xcode Version
         run: xcodebuild -version
 
-      - name: Install XcodeGen
-        run: brew install xcodegen
+      - name: Install XcodeGen via Mint
+        run: |
+          brew install mint
+          mint install yonaskolb/XcodeGen@2.42.0
 
       - name: Generate Xcode Project
-        run: xcodegen generate --spec project.yml --project .
+        run: mint run XcodeGen generate --spec project.yml --project .
 
       - name: Build App
         run: |
@@ -40,7 +42,7 @@ jobs:
       - name: Package IPA
         run: |
           APP_PATH=$(find "$RUNNER_TEMP/build" -name "iOSVideoPlayer.app" -type d | head -1)
-          echo "Found: $APP_PATH"
+          echo "App: $APP_PATH"
           mkdir -p Payload
           cp -r "$APP_PATH" Payload/
           zip -r iOSVideoPlayer.ipa Payload
