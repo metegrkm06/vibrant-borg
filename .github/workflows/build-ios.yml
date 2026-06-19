@@ -16,14 +16,13 @@ jobs:
       - name: Show Xcode Version
         run: xcodebuild -version
 
-      - name: Install XcodeGen
-        run: brew install xcodegen
+      - name: Install XcodeGen and ldid
+        run: |
+          brew install xcodegen
+          brew install ldid
 
       - name: Generate Xcode Project
         run: xcodegen generate --spec project.yml --project .
-
-      - name: List Generated Project
-        run: ls -la *.xcodeproj/ || echo "No xcodeproj found"
 
       - name: Resolve Swift Package Dependencies
         run: |
@@ -31,7 +30,6 @@ jobs:
             -project iOSVideoPlayer.xcodeproj \
             -scheme iOSVideoPlayer \
             -clonedSourcePackagesDirPath .spm-cache
-        continue-on-error: false
 
       - name: Build App (Release, no signing)
         run: |
@@ -46,33 +44,49 @@ jobs:
             CODE_SIGN_IDENTITY="" \
             CODE_SIGN_ENTITLEMENTS="" \
             AD_HOC_CODE_SIGNING_ALLOWED=YES \
-            ONLY_ACTIVE_ARCH=NO \
-            | xcpretty || xcodebuild clean build \
-              -project iOSVideoPlayer.xcodeproj \
-              -scheme iOSVideoPlayer \
-              -configuration Release \
-              -sdk iphoneos \
-              -derivedDataPath "$RUNNER_TEMP/build" \
-              CODE_SIGNING_ALLOWED=NO \
-              CODE_SIGNING_REQUIRED=NO \
-              CODE_SIGN_IDENTITY="" \
-              CODE_SIGN_ENTITLEMENTS="" \
-              AD_HOC_CODE_SIGNING_ALLOWED=YES \
-              ONLY_ACTIVE_ARCH=NO
+            ONLY_ACTIVE_ARCH=NO
 
       - name: Find .app Bundle
-        id: find_app
         run: |
-          APP_PATH=$(find "$RUNNER_TEMP/build" -name "*.app" -type d | head -1)
-          echo "APP_PATH=$APP_PATH" >> $GITHUB_ENV
+          APP_PATH=$(find "$RUNNER_TEMP/build" -name "iOSVideoPlayer.app" -type d | head -1)
           echo "Found app at: $APP_PATH"
+          echo "APP_PATH=$APP_PATH" >> $GITHUB_ENV
+
+      - name: Ad-hoc Sign Binary with ldid
+        # ldid -S applies a fake/self code signature that LiveContainer and dyld can map
+        # This is the standard approach for sideloaded apps needing a minimal signature
+        run: |
+          BINARY="$APP_PATH/iOSVideoPlayer"
+          echo "Signing binary at: $BINARY"
+          
+          # Write a minimal entitlements plist so ldid has something to embed
+          cat > /tmp/entitlements.plist << 'EOF'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>get-task-allow</key>
+            <true/>
+            <key>application-identifier</key>
+            <string>com.vibrantborg.iosvideoplayer</string>
+          </dict>
+          </plist>
+          EOF
+          
+          # Apply fake signature using ldid
+          ldid -S/tmp/entitlements.plist "$BINARY"
+          echo "Ad-hoc signature applied successfully"
+          
+          # Verify the signature was embedded
+          file "$BINARY"
+          otool -l "$BINARY" | grep -A2 "LC_CODE_SIGNATURE" || echo "No LC_CODE_SIGNATURE found (may still work)"
 
       - name: Package IPA
         run: |
           mkdir -p Payload
           cp -r "$APP_PATH" Payload/
           zip -r iOSVideoPlayer.ipa Payload
-          echo "IPA created successfully"
+          echo "IPA created:"
           ls -lh iOSVideoPlayer.ipa
 
       - name: Upload IPA Artifact
