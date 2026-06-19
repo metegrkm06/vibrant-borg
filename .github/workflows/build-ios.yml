@@ -22,13 +22,6 @@ jobs:
       - name: Generate Xcode Project
         run: xcodegen generate --spec project.yml --project .
 
-      - name: Resolve Swift Package Dependencies
-        run: |
-          xcodebuild -resolvePackageDependencies \
-            -project iOSVideoPlayer.xcodeproj \
-            -scheme iOSVideoPlayer \
-            -clonedSourcePackagesDirPath .spm-cache
-
       - name: Build App
         run: |
           xcodebuild clean build \
@@ -47,7 +40,7 @@ jobs:
       - name: Package IPA
         run: |
           APP_PATH=$(find "$RUNNER_TEMP/build" -name "iOSVideoPlayer.app" -type d | head -1)
-          echo "Found app: $APP_PATH"
+          echo "Found: $APP_PATH"
           mkdir -p Payload
           cp -r "$APP_PATH" Payload/
           zip -r iOSVideoPlayer.ipa Payload

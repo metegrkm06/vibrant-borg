@@ -1,405 +1,341 @@
 import Foundation
-import Swifter
+import Network
 
-// For networking structures and functions (getifaddrs)
-#if canImport(Darwin)
-import Darwin
-#endif
-
+// WiFi server implemented using Apple's native Network framework (no external deps)
+// Uses NWListener for TCP server, serving a minimal HTTP portal on port 8080
 class WiFiServerManager: ObservableObject {
     @Published var isRunning = false
     @Published var serverIP: String?
     @Published var serverPort: UInt16 = 8080
-    
-    private var server: HttpServer?
-    
+
+    private var listener: NWListener?
+    private let documentsURL = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+    private let queue = DispatchQueue(label: "wifi.server.queue", qos: .userInitiated)
+
     var serverURL: String? {
         guard let ip = serverIP else { return nil }
         return "http://\(ip):\(serverPort)"
     }
-    
-    // Starts the local Swifter HTTP server
+
     func startServer() {
         guard !isRunning else { return }
-        
-        let server = HttpServer()
-        let documentsURL = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-        
-        // Root Portal page
-        server["/"] = { _ in
-            return .ok(.html(self.portalHTML()))
-        }
-        
-        // JSON API Endpoint to list available videos
-        server["/list"] = { _ in
-            do {
-                let fileURLs = try FileManager.default.contentsOfDirectory(
-                    at: documentsURL,
-                    includingPropertiesForKeys: [.fileSizeKey],
-                    options: [.skipsHiddenFiles]
-                )
-                let videos = fileURLs.filter { url in
-                    let ext = url.pathExtension.lowercased()
-                    return ext == "mp4" || ext == "mov"
-                }
-                
-                var list: [[String: String]] = []
-                for url in videos {
-                    let name = url.lastPathComponent
-                    let resourceValues = try? url.resourceValues(forKeys: [.fileSizeKey])
-                    let size = resourceValues?.fileSize ?? 0
-                    list.append([
-                        "name": name,
-                        "size": ByteCountFormatter.string(fromByteCount: Int64(size), countStyle: .file)
-                    ])
-                }
-                
-                if let jsonData = try? JSONSerialization.data(withJSONObject: list, options: []),
-                   let jsonStr = String(data: jsonData, encoding: .utf8) {
-                    return .ok(.text(jsonStr))
-                }
-            } catch {
-                print("Error building file list: \(error)")
-            }
-            return .internalServerError
-        }
-        
-        // Expose directory path using Swifter's native folder sharer
-        server["/files/:path"] = shareFilesFromDirectory(documentsURL.path)
-        
-        // Multipart POST request to handle video uploads
-        server.POST["/upload"] = { request in
-            let multipart = request.parseMultiPartFormData()
-            for part in multipart {
-                if let fileName = part.fileName, !fileName.isEmpty {
-                    // Check file extension safety
-                    let ext = URL(fileURLWithPath: fileName).pathExtension.lowercased()
-                    guard ext == "mp4" || ext == "mov" else { continue }
-                    
-                    let fileURL = documentsURL.appendingPathComponent(fileName)
-                    let fileData = Data(part.body)
-                    
-                    do {
-                        try fileData.write(to: fileURL)
-                        print("Saved file to: \(fileURL.path)")
-                    } catch {
-                        print("Failed to save uploaded file: \(error)")
-                        return .internalServerError
-                    }
-                }
-            }
-            return .ok(.text("OK"))
-        }
-        
-        // POST API to delete file
-        server.POST["/delete"] = { request in
-            let query = request.queryParams
-            guard let name = query.first(where: { $0.0 == "name" })?.1 else {
-                return .badRequest(nil)
-            }
-            
-            let fileURL = documentsURL.appendingPathComponent(name)
-            do {
-                if FileManager.default.fileExists(atPath: fileURL.path) {
-                    try FileManager.default.removeItem(at: fileURL)
-                    return .ok(.text("Deleted"))
-                }
-                return .notFound
-            } catch {
-                print("Error deleting file via API: \(error)")
-                return .internalServerError
-            }
-        }
-        
+
         do {
-            try server.start(serverPort)
-            self.server = server
-            self.serverIP = self.getWiFiAddress()
-            self.isRunning = true
+            let params = NWParameters.tcp
+            listener = try NWListener(using: params, on: NWEndpoint.Port(rawValue: serverPort)!)
         } catch {
-            print("Swifter server start failed: \(error)")
+            print("Failed to create listener: \(error)")
+            return
+        }
+
+        listener?.newConnectionHandler = { [weak self] connection in
+            connection.start(queue: self?.queue ?? .global())
+            self?.handleConnection(connection)
+        }
+
+        listener?.stateUpdateHandler = { [weak self] state in
+            guard let self = self else { return }
+            DispatchQueue.main.async {
+                switch state {
+                case .ready:
+                    self.serverIP = self.getWiFiAddress()
+                    self.isRunning = true
+                case .failed(let err):
+                    print("Listener failed: \(err)")
+                    self.isRunning = false
+                case .cancelled:
+                    self.isRunning = false
+                default:
+                    break
+                }
+            }
+        }
+
+        listener?.start(queue: queue)
+    }
+
+    func stopServer() {
+        listener?.cancel()
+        listener = nil
+        DispatchQueue.main.async {
+            self.serverIP = nil
+            self.isRunning = false
         }
     }
-    
-    // Stop server socket
-    func stopServer() {
-        server?.stop()
-        server = nil
-        serverIP = nil
-        isRunning = false
+
+    // MARK: - Connection handling
+
+    private func handleConnection(_ connection: NWConnection) {
+        connection.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [weak self] data, _, isComplete, error in
+            guard let self = self, let data = data, !data.isEmpty else {
+                connection.cancel()
+                return
+            }
+
+            let requestStr = String(data: data, encoding: .utf8) ?? ""
+            let response = self.routeRequest(requestStr, rawData: data)
+            self.sendResponse(response, on: connection)
+        }
     }
-    
-    // Helper to extract device IPv4 on the local network Wi-Fi interface (en0)
+
+    private func routeRequest(_ request: String, rawData: Data) -> HTTPResponse {
+        let lines = request.components(separatedBy: "\r\n")
+        guard let firstLine = lines.first else { return .plain(404, "Not Found") }
+        let parts = firstLine.components(separatedBy: " ")
+        guard parts.count >= 2 else { return .plain(400, "Bad Request") }
+        let method = parts[0]
+        let path = parts[1].components(separatedBy: "?").first ?? parts[1]
+        let query = parts[1].components(separatedBy: "?").dropFirst().first ?? ""
+
+        switch (method, path) {
+        case ("GET", "/"):
+            return .html(200, portalHTML())
+        case ("GET", "/list"):
+            return listFiles()
+        case ("POST", "/upload"):
+            return handleUpload(rawData: rawData, headers: lines)
+        case ("POST", "/delete"):
+            return handleDelete(query: query)
+        default:
+            // Serve files from /files/
+            if path.hasPrefix("/files/") {
+                return serveFile(path: path)
+            }
+            return .plain(404, "Not Found")
+        }
+    }
+
+    // MARK: - Route Handlers
+
+    private func listFiles() -> HTTPResponse {
+        do {
+            let urls = try FileManager.default.contentsOfDirectory(at: documentsURL,
+                includingPropertiesForKeys: [.fileSizeKey], options: [.skipsHiddenFiles])
+            let videos = urls.filter { ["mp4", "mov"].contains($0.pathExtension.lowercased()) }
+            var list: [[String: String]] = []
+            for url in videos {
+                let size = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0
+                list.append([
+                    "name": url.lastPathComponent,
+                    "size": ByteCountFormatter.string(fromByteCount: Int64(size), countStyle: .file)
+                ])
+            }
+            if let json = try? JSONSerialization.data(withJSONObject: list),
+               let str = String(data: json, encoding: .utf8) {
+                return .json(200, str)
+            }
+        } catch { print("List error: \(error)") }
+        return .plain(500, "Error")
+    }
+
+    private func serveFile(path: String) -> HTTPResponse {
+        let name = String(path.dropFirst("/files/".count))
+            .removingPercentEncoding ?? ""
+        let fileURL = documentsURL.appendingPathComponent(name)
+        guard FileManager.default.fileExists(atPath: fileURL.path),
+              let data = try? Data(contentsOf: fileURL) else {
+            return .plain(404, "Not Found")
+        }
+        return .file(200, data, name)
+    }
+
+    private func handleUpload(rawData: Data, headers: [String]) -> HTTPResponse {
+        // Parse multipart boundary from Content-Type header
+        guard let contentTypeLine = headers.first(where: { $0.lowercased().hasPrefix("content-type:") }),
+              let boundary = contentTypeLine.components(separatedBy: "boundary=").last else {
+            return .plain(400, "No boundary")
+        }
+
+        let boundaryData = ("--" + boundary).data(using: .utf8)!
+        let parts = rawData.components(separatedBy: boundaryData)
+
+        for part in parts.dropFirst() {
+            guard let headerEnd = part.range(of: "\r\n\r\n".data(using: .utf8)!) else { continue }
+            let headerData = part[part.startIndex..<headerEnd.lowerBound]
+            let headerStr = String(data: headerData, encoding: .utf8) ?? ""
+
+            guard let fileNameRange = headerStr.range(of: "filename=\""),
+                  let fileNameEnd = headerStr[fileNameRange.upperBound...].range(of: "\"") else { continue }
+
+            let fileName = String(headerStr[fileNameRange.upperBound..<fileNameEnd.lowerBound])
+            let ext = URL(fileURLWithPath: fileName).pathExtension.lowercased()
+            guard ext == "mp4" || ext == "mov" else { continue }
+
+            let bodyStart = part.index(headerEnd.upperBound, offsetBy: 0)
+            var body = part[bodyStart...]
+            // Remove trailing \r\n
+            if body.suffix(2) == "\r\n".data(using: .utf8) {
+                body = body.dropLast(2)
+            }
+
+            let fileURL = documentsURL.appendingPathComponent(fileName)
+            try? Data(body).write(to: fileURL)
+        }
+
+        return .plain(200, "OK")
+    }
+
+    private func handleDelete(query: String) -> HTTPResponse {
+        let params = query.components(separatedBy: "&")
+        guard let nameParam = params.first(where: { $0.hasPrefix("name=") }),
+              let name = nameParam.components(separatedBy: "=").last?.removingPercentEncoding else {
+            return .plain(400, "Missing name")
+        }
+        let fileURL = documentsURL.appendingPathComponent(name)
+        do {
+            if FileManager.default.fileExists(atPath: fileURL.path) {
+                try FileManager.default.removeItem(at: fileURL)
+                return .plain(200, "Deleted")
+            }
+            return .plain(404, "Not Found")
+        } catch {
+            return .plain(500, "Error")
+        }
+    }
+
+    // MARK: - HTTP Response
+
+    private func sendResponse(_ response: HTTPResponse, on connection: NWConnection) {
+        let data = response.data
+        connection.send(content: data, completion: .contentProcessed { _ in
+            connection.cancel()
+        })
+    }
+
+    // MARK: - Wi-Fi IP Detection
+
     private func getWiFiAddress() -> String? {
         var address: String?
         var ifaddr: UnsafeMutablePointer<ifaddrs>?
-        guard getifaddrs(&ifaddr) == 0 else { return nil }
-        guard let firstAddr = ifaddr else { return nil }
-        
+        guard getifaddrs(&ifaddr) == 0, let firstAddr = ifaddr else { return nil }
         for ptr in sequence(first: firstAddr, next: { $0.pointee.ifa_next }) {
             let interface = ptr.pointee
-            let addrFamily = interface.ifa_addr.pointee.sa_family
             let name = String(cString: interface.ifa_name)
-            
-            // en0 is the default Wi-Fi interface identifier on iOS devices
-            if name == "en0" {
-                if addrFamily == UInt8(AF_INET) { // IPv4
-                    var hostname = [CChar](repeating: 0, count: Int(NI_MAXHOST))
-                    getnameinfo(
-                        interface.ifa_addr,
-                        socklen_t(interface.ifa_addr.pointee.sa_len),
-                        &hostname,
-                        socklen_t(hostname.count),
-                        nil,
-                        socklen_t(0),
-                        NI_NUMERICHOST
-                    )
-                    address = String(cString: hostname)
-                }
+            if name == "en0", interface.ifa_addr.pointee.sa_family == UInt8(AF_INET) {
+                var hostname = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+                getnameinfo(interface.ifa_addr, socklen_t(interface.ifa_addr.pointee.sa_len),
+                            &hostname, socklen_t(hostname.count), nil, 0, NI_NUMERICHOST)
+                address = String(cString: hostname)
             }
         }
         freeifaddrs(ifaddr)
         return address
     }
-    
-    // Portal HTML String
+
+    // MARK: - Portal HTML
+
     private func portalHTML() -> String {
         return """
         <!DOCTYPE html>
         <html>
         <head>
             <meta name="viewport" content="width=device-width, initial-scale=1">
-            <title>iOS Video Player - Web Upload Portal</title>
+            <title>iOS Video Player - Wi-Fi Portal</title>
             <style>
-                body {
-                    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-                    background-color: #121212;
-                    color: #E0E0E0;
-                    margin: 0;
-                    padding: 20px;
-                    display: flex;
-                    flex-direction: column;
-                    align-items: center;
-                }
-                .container {
-                    max-width: 600px;
-                    width: 100%;
-                    background: #1E1E1E;
-                    padding: 20px;
-                    border-radius: 12px;
-                    box-shadow: 0 4px 10px rgba(0,0,0,0.3);
-                }
-                h1 {
-                    text-align: center;
-                    color: #007AFF;
-                    font-size: 24px;
-                    margin-bottom: 20px;
-                }
-                .dropzone {
-                    border: 2px dashed #007AFF;
-                    border-radius: 8px;
-                    padding: 30px;
-                    text-align: center;
-                    background: #252525;
-                    cursor: pointer;
-                    transition: background 0.3s;
-                    margin-bottom: 20px;
-                }
-                .dropzone:hover, .dropzone.dragover {
-                    background: #2C2C2C;
-                }
-                .file-list {
-                    list-style: none;
-                    padding: 0;
-                    margin: 0;
-                }
-                .file-item {
-                    display: flex;
-                    justify-content: space-between;
-                    align-items: center;
-                    padding: 10px;
-                    background: #252525;
-                    border-radius: 6px;
-                    margin-bottom: 8px;
-                }
-                .file-info {
-                    display: flex;
-                    flex-direction: column;
-                }
-                .file-name {
-                    font-weight: 500;
-                    word-break: break-all;
-                }
-                .file-size {
-                    font-size: 12px;
-                    color: #888;
-                    margin-top: 2px;
-                }
-                .btn {
-                    background: #007AFF;
-                    color: white;
-                    border: none;
-                    padding: 6px 12px;
-                    border-radius: 4px;
-                    cursor: pointer;
-                    text-decoration: none;
-                    font-size: 14px;
-                    transition: background 0.2s;
-                }
-                .btn:hover {
-                    background: #0056B3;
-                }
-                .btn-delete {
-                    background: #FF3B30;
-                }
-                .btn-delete:hover {
-                    background: #C73E3A;
-                }
-                .progress-bar {
-                    width: 100%;
-                    height: 8px;
-                    background-color: #333;
-                    border-radius: 4px;
-                    overflow: hidden;
-                    display: none;
-                    margin-bottom: 20px;
-                }
-                .progress-fill {
-                    height: 100%;
-                    background-color: #30D158;
-                    width: 0%;
-                    transition: width 0.1s;
-                }
-                #fileInput {
-                    display: none;
-                }
+                body { font-family: -apple-system, sans-serif; background: #121212; color: #E0E0E0; margin: 0; padding: 20px; display: flex; flex-direction: column; align-items: center; }
+                .container { max-width: 600px; width: 100%; background: #1E1E1E; padding: 20px; border-radius: 12px; }
+                h1 { text-align: center; color: #007AFF; }
+                .dropzone { border: 2px dashed #007AFF; border-radius: 8px; padding: 30px; text-align: center; background: #252525; cursor: pointer; margin-bottom: 20px; }
+                .file-item { display: flex; justify-content: space-between; align-items: center; padding: 10px; background: #252525; border-radius: 6px; margin-bottom: 8px; }
+                .btn { background: #007AFF; color: white; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer; text-decoration: none; font-size: 14px; }
+                .btn-delete { background: #FF3B30; }
+                .progress-bar { width: 100%; height: 8px; background: #333; border-radius: 4px; display: none; margin-bottom: 20px; }
+                .progress-fill { height: 100%; background: #30D158; width: 0%; transition: width 0.1s; }
+                #fileInput { display: none; }
             </style>
         </head>
         <body>
             <div class="container">
-                <h1>iOS Video Player Wi-Fi Portal</h1>
-                
-                <div class="dropzone" id="dropzone">
-                    Drag & Drop video files (.mp4 or .mov) here or click to select
-                </div>
+                <h1>📺 Video Player Wi-Fi Portal</h1>
+                <div class="dropzone" id="dropzone">Drag & Drop .mp4 or .mov files here, or click to select</div>
                 <input type="file" id="fileInput" accept=".mp4,.mov" multiple>
-                
-                <div class="progress-bar" id="progressBar">
-                    <div class="progress-fill" id="progressFill"></div>
-                </div>
-                
-                <h2>Available Videos</h2>
-                <ul class="file-list" id="fileList">
-                    <!-- Dynamically populated -->
-                </ul>
+                <div class="progress-bar" id="progressBar"><div class="progress-fill" id="progressFill"></div></div>
+                <h2>Videos</h2>
+                <ul id="fileList" style="list-style:none;padding:0;"></ul>
             </div>
-
             <script>
                 const dropzone = document.getElementById('dropzone');
                 const fileInput = document.getElementById('fileInput');
                 const progressBar = document.getElementById('progressBar');
                 const progressFill = document.getElementById('progressFill');
                 const fileList = document.getElementById('fileList');
-
                 dropzone.addEventListener('click', () => fileInput.click());
-
-                dropzone.addEventListener('dragover', (e) => {
-                    e.preventDefault();
-                    dropzone.classList.add('dragover');
-                });
-
-                dropzone.addEventListener('dragleave', () => {
-                    dropzone.classList.remove('dragover');
-                });
-
-                dropzone.addEventListener('drop', (e) => {
-                    e.preventDefault();
-                    dropzone.classList.remove('dragover');
-                    handleFiles(e.dataTransfer.files);
-                });
-
-                fileInput.addEventListener('change', () => {
-                    handleFiles(fileInput.files);
-                });
-
-                function handleFiles(files) {
-                    if (files.length === 0) return;
-                    progressBar.style.display = 'block';
-                    uploadFile(files, 0);
+                dropzone.addEventListener('dragover', e => { e.preventDefault(); dropzone.style.background='#2C2C2C'; });
+                dropzone.addEventListener('dragleave', () => { dropzone.style.background='#252525'; });
+                dropzone.addEventListener('drop', e => { e.preventDefault(); dropzone.style.background='#252525'; handleFiles(e.dataTransfer.files); });
+                fileInput.addEventListener('change', () => handleFiles(fileInput.files));
+                function handleFiles(files) { if (!files.length) return; progressBar.style.display='block'; uploadFile(files, 0); }
+                function uploadFile(files, i) {
+                    if (i >= files.length) { progressBar.style.display='none'; loadFiles(); return; }
+                    const fd = new FormData(); fd.append('file', files[i]);
+                    const xhr = new XMLHttpRequest(); xhr.open('POST', '/upload', true);
+                    xhr.upload.onprogress = e => { if (e.lengthComputable) progressFill.style.width=(e.loaded/e.total*100)+'%'; };
+                    xhr.onload = () => { if (xhr.status===200) uploadFile(files, i+1); else { alert('Upload failed'); progressBar.style.display='none'; } };
+                    xhr.send(fd);
                 }
-
-                function uploadFile(files, index) {
-                    if (index >= files.length) {
-                        progressBar.style.display = 'none';
-                        loadFiles();
-                        return;
-                    }
-                    const file = files[index];
-                    const formData = new FormData();
-                    formData.append('file', file);
-
-                    const xhr = new XMLHttpRequest();
-                    xhr.open('POST', '/upload', true);
-
-                    xhr.upload.onprogress = (e) => {
-                        if (e.lengthComputable) {
-                            const percentComplete = (e.loaded / e.total) * 100;
-                            progressFill.style.width = percentComplete + '%';
-                        }
-                    };
-
-                    xhr.onload = () => {
-                        if (xhr.status === 200) {
-                            uploadFile(files, index + 1);
-                        } else {
-                            alert('Failed to upload: ' + file.name);
-                            progressBar.style.display = 'none';
-                        }
-                    };
-
-                    xhr.send(formData);
-                }
-
                 function loadFiles() {
-                    fetch('/list')
-                        .then(res => res.json())
-                        .then(data => {
-                            fileList.innerHTML = '';
-                            if (data.length === 0) {
-                                fileList.innerHTML = '<p style="text-align: center; color: #888;">No videos uploaded yet.</p>';
-                                return;
-                            }
-                            data.forEach(file => {
-                                const li = document.createElement('li');
-                                li.className = 'file-item';
-                                li.innerHTML = `
-                                    <div class="file-info">
-                                        <span class="file-name">${file.name}</span>
-                                        <span class="file-size">${file.size}</span>
-                                    </div>
-                                    <div style="display: flex; gap: 8px;">
-                                        <a href="/files/${encodeURIComponent(file.name)}" class="btn" download>Download</a>
-                                        <button onclick="deleteFile('${file.name}')" class="btn btn-delete">Delete</button>
-                                    </div>
-                                `;
-                                fileList.appendChild(li);
-                            });
+                    fetch('/list').then(r=>r.json()).then(data => {
+                        fileList.innerHTML = data.length ? '' : '<li style="color:#888;text-align:center">No videos yet.</li>';
+                        data.forEach(f => {
+                            const li = document.createElement('li'); li.className='file-item';
+                            li.innerHTML=`<span>${f.name}<br><small style="color:#888">${f.size}</small></span><div><a href="/files/${encodeURIComponent(f.name)}" class="btn" download>⬇</a> <button onclick="deleteFile('${f.name}')" class="btn btn-delete">🗑</button></div>`;
+                            fileList.appendChild(li);
                         });
+                    });
                 }
-
-                function deleteFile(name) {
-                    if (!confirm('Are you sure you want to delete ' + name + '?')) return;
-                    fetch('/delete?name=' + encodeURIComponent(name), { method: 'POST' })
-                        .then(res => {
-                            if (res.ok) loadFiles();
-                            else alert('Failed to delete file');
-                        });
-                }
-
+                function deleteFile(n) { if(!confirm('Delete '+n+'?')) return; fetch('/delete?name='+encodeURIComponent(n),{method:'POST'}).then(r=>{ if(r.ok) loadFiles(); }); }
                 loadFiles();
             </script>
         </body>
         </html>
         """
+    }
+}
+
+// MARK: - HTTPResponse helper
+
+enum HTTPResponse {
+    case plain(Int, String)
+    case html(Int, String)
+    case json(Int, String)
+    case file(Int, Data, String)
+
+    var data: Data {
+        switch self {
+        case .plain(let code, let body):
+            return buildResponse(code: code, contentType: "text/plain", body: body.data(using: .utf8)!)
+        case .html(let code, let body):
+            return buildResponse(code: code, contentType: "text/html; charset=utf-8", body: body.data(using: .utf8)!)
+        case .json(let code, let body):
+            return buildResponse(code: code, contentType: "application/json", body: body.data(using: .utf8)!)
+        case .file(let code, let body, let name):
+            return buildResponse(code: code, contentType: "application/octet-stream", body: body,
+                                 extra: "Content-Disposition: attachment; filename=\"\(name)\"")
+        }
+    }
+
+    private func buildResponse(code: Int, contentType: String, body: Data, extra: String = "") -> Data {
+        let statusText = code == 200 ? "OK" : code == 404 ? "Not Found" : code == 400 ? "Bad Request" : "Error"
+        var headers = "HTTP/1.1 \(code) \(statusText)\r\nContent-Type: \(contentType)\r\nContent-Length: \(body.count)\r\nConnection: close\r\n"
+        if !extra.isEmpty { headers += extra + "\r\n" }
+        headers += "\r\n"
+        var result = headers.data(using: .utf8)!
+        result.append(body)
+        return result
+    }
+}
+
+// MARK: - Data helper for multipart splitting
+
+private extension Data {
+    func components(separatedBy separator: Data) -> [Data] {
+        var result: [Data] = []
+        var start = startIndex
+        while let range = self.range(of: separator, in: start..<endIndex) {
+            result.append(self[start..<range.lowerBound])
+            start = range.upperBound
+        }
+        result.append(self[start..<endIndex])
+        return result
     }
 }
