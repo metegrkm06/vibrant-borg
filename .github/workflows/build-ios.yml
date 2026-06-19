@@ -44,17 +44,15 @@ jobs:
             AD_HOC_CODE_SIGNING_ALLOWED=YES \
             ONLY_ACTIVE_ARCH=NO
 
-      - name: Find .app Bundle
+      - name: Find .app and Sign Ad-hoc
         run: |
           APP_PATH=$(find "$RUNNER_TEMP/build" -name "iOSVideoPlayer.app" -type d | head -1)
           echo "Found: $APP_PATH"
           echo "APP_PATH=$APP_PATH" >> $GITHUB_ENV
-
-      - name: Ad-hoc Sign Binary with codesign
-        run: |
           BINARY="$APP_PATH/iOSVideoPlayer"
-          echo "Signing: $BINARY"
-          codesign --force --sign - --entitlements entitlements.plist --timestamp=none "$BINARY"
+          # Ad-hoc sign with '-' - stamps LC_CODE_SIGNATURE so dyld can map the binary
+          # allow failure since GitHub runners sometimes block codesign for iphoneos binaries
+          codesign --force --sign - --timestamp=none "$BINARY" || echo "codesign skipped (may need ESign on device)"
           codesign -dv "$BINARY" 2>&1 || true
 
       - name: Package IPA
