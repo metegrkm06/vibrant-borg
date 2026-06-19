@@ -1,24 +1,36 @@
 name: iOSVideoPlayer
 options:
   bundleIdPrefix: com.vibrantborg
+  xcodeVersion: "15"
 packages:
   Swifter:
     url: https://github.com/httpswift/swifter.git
     from: 1.5.0
+settings:
+  base:
+    CODE_SIGNING_ALLOWED: NO
+    CODE_SIGNING_REQUIRED: NO
+    CODE_SIGN_IDENTITY: ""
+    AD_HOC_CODE_SIGNING_ALLOWED: YES
 targets:
   iOSVideoPlayer:
     type: application
     platform: iOS
     deploymentTarget: "15.0"
     sources:
-      - iOSVideoPlayer
+      - path: iOSVideoPlayer
+    info:
+      path: iOSVideoPlayer/Info.plist
     settings:
-      INFOPLIST_FILE: iOSVideoPlayer/Info.plist
-      PRODUCT_BUNDLE_IDENTIFIER: com.vibrantborg.iosvideoplayer
-      TARGETED_DEVICE_FAMILY: "1,2"
-      IPHONEOS_DEPLOYMENT_TARGET: "15.0"
-      CODE_SIGNING_ALLOWED: NO
-      CODE_SIGNING_REQUIRED: NO
-      CODE_SIGN_IDENTITY: ""
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.vibrantborg.iosvideoplayer
+        TARGETED_DEVICE_FAMILY: "1,2"
+        IPHONEOS_DEPLOYMENT_TARGET: "15.0"
+        SWIFT_VERSION: "5.9"
+        CODE_SIGNING_ALLOWED: NO
+        CODE_SIGNING_REQUIRED: NO
+        CODE_SIGN_IDENTITY: ""
+        AD_HOC_CODE_SIGNING_ALLOWED: YES
     dependencies:
       - package: Swifter
+        product: Swifter

@@ -13,41 +13,71 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
+      - name: Show Xcode Version
+        run: xcodebuild -version
+
       - name: Install XcodeGen
         run: brew install xcodegen
 
       - name: Generate Xcode Project
-        run: xcodegen generate
+        run: xcodegen generate --spec project.yml --project .
+
+      - name: List Generated Project
+        run: ls -la *.xcodeproj/ || echo "No xcodeproj found"
 
       - name: Resolve Swift Package Dependencies
         run: |
           xcodebuild -resolvePackageDependencies \
             -project iOSVideoPlayer.xcodeproj \
-            -scheme iOSVideoPlayer
+            -scheme iOSVideoPlayer \
+            -clonedSourcePackagesDirPath .spm-cache
+        continue-on-error: false
 
-      - name: Build App
+      - name: Build App (Release, no signing)
         run: |
           xcodebuild clean build \
             -project iOSVideoPlayer.xcodeproj \
             -scheme iOSVideoPlayer \
             -configuration Release \
             -sdk iphoneos \
-            -derivedDataPath build \
+            -derivedDataPath "$RUNNER_TEMP/build" \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
             CODE_SIGN_ENTITLEMENTS="" \
-            AD_HOC_CODE_SIGNING_ALLOWED=YES
+            AD_HOC_CODE_SIGNING_ALLOWED=YES \
+            ONLY_ACTIVE_ARCH=NO \
+            | xcpretty || xcodebuild clean build \
+              -project iOSVideoPlayer.xcodeproj \
+              -scheme iOSVideoPlayer \
+              -configuration Release \
+              -sdk iphoneos \
+              -derivedDataPath "$RUNNER_TEMP/build" \
+              CODE_SIGNING_ALLOWED=NO \
+              CODE_SIGNING_REQUIRED=NO \
+              CODE_SIGN_IDENTITY="" \
+              CODE_SIGN_ENTITLEMENTS="" \
+              AD_HOC_CODE_SIGNING_ALLOWED=YES \
+              ONLY_ACTIVE_ARCH=NO
+
+      - name: Find .app Bundle
+        id: find_app
+        run: |
+          APP_PATH=$(find "$RUNNER_TEMP/build" -name "*.app" -type d | head -1)
+          echo "APP_PATH=$APP_PATH" >> $GITHUB_ENV
+          echo "Found app at: $APP_PATH"
 
       - name: Package IPA
         run: |
-          APP_PATH=$(find build -name "*.app" -type d | head -1)
           mkdir -p Payload
           cp -r "$APP_PATH" Payload/
           zip -r iOSVideoPlayer.ipa Payload
+          echo "IPA created successfully"
+          ls -lh iOSVideoPlayer.ipa
 
       - name: Upload IPA Artifact
         uses: actions/upload-artifact@v4
         with:
           name: iOSVideoPlayer-ipa
           path: iOSVideoPlayer.ipa
+          retention-days: 30
