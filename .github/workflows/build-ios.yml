@@ -16,13 +16,8 @@ jobs:
       - name: Show Xcode Version
         run: xcodebuild -version
 
-      - name: Install XcodeGen via Mint
-        run: |
-          brew install mint
-          mint install yonaskolb/XcodeGen@2.42.0
-
-      - name: Generate Xcode Project
-        run: mint run XcodeGen generate --spec project.yml --project .
+      - name: Generate Xcode Project (no XcodeGen needed)
+        run: python3 generate_project.py
 
       - name: Build App
         run: |
