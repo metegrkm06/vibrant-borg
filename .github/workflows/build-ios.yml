@@ -27,10 +27,9 @@ jobs:
             -configuration Release \
             -sdk iphoneos \
             -derivedDataPath "$RUNNER_TEMP/build" \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGN_IDENTITY="" \
-            CODE_SIGN_ENTITLEMENTS="" \
+            CODE_SIGNING_ALLOWED=YES \
+            CODE_SIGNING_REQUIRED=YES \
+            CODE_SIGN_IDENTITY="-" \
             AD_HOC_CODE_SIGNING_ALLOWED=YES \
             ONLY_ACTIVE_ARCH=NO
 
@@ -39,8 +38,9 @@ jobs:
           APP_PATH=$(find "$RUNNER_TEMP/build" -name "iOSVideoPlayer.app" -type d | head -1)
           echo "App: $APP_PATH"
           mkdir -p Payload
-          cp -r "$APP_PATH" Payload/
-          zip -r iOSVideoPlayer.ipa Payload
+          cp -a "$APP_PATH" Payload/
+          chmod +x Payload/iOSVideoPlayer.app/iOSVideoPlayer
+          zip -r -y iOSVideoPlayer.ipa Payload
           ls -lh iOSVideoPlayer.ipa
 
       - name: Upload IPA Artifact
