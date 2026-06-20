@@ -7,20 +7,16 @@ import UIKit
 
 // MARK: - VR Viewing Mode
 
-enum VRMode: Int, CaseIterable, Identifiable {
-    case sideBySide = 0
-    case spherical = 1
-    case cinema = 2
-    case voidTheater = 3
-
-    var id: Int { rawValue }
+enum VRMode: String, CaseIterable, Identifiable {
+    case sideBySide, spherical, cinema, void
+    var id: String { rawValue }
 
     var label: String {
         switch self {
         case .sideBySide: return "SBS"
         case .spherical: return "360°"
         case .cinema: return "Cinema"
-        case .voidTheater: return "Void"
+        case .void: return "Void"
         }
     }
 
@@ -29,457 +25,245 @@ enum VRMode: Int, CaseIterable, Identifiable {
         case .sideBySide: return "rectangle.split.2x1"
         case .spherical: return "globe"
         case .cinema: return "tv"
-        case .voidTheater: return "sparkles"
+        case .void: return "sparkles"
         }
     }
 
     var subtitle: String {
         switch self {
-        case .sideBySide: return "Cardboard"
-        case .spherical: return "360° / 180°"
-        case .cinema: return "Room + TV"
-        case .voidTheater: return "Space IMAX"
+        case .sideBySide: return "Fixed screen"
+        case .spherical: return "Full spherical"
+        case .cinema: return "Virtual room"
+        case .void: return "Space IMAX"
         }
     }
 }
 
-// MARK: - VR Scene Manager
+// MARK: - Scene Manager
 
 class VRSceneManager: ObservableObject {
-    let player: AVPlayer
+    @Published var currentMode: VRMode = .sideBySide
+    @Published var isPlacingTV = false
+    @Published var gazeProgress: CGFloat = 0
+
     let scene = SCNScene()
-    let headNode = SCNNode()
     let leftCam = SCNNode()
     let rightCam = SCNNode()
 
-    @Published var currentMode: VRMode = .sideBySide
-    @Published var gazeProgress: CGFloat = 0
-    @Published var isPlacingTV = false
-
+    // Core nodes
+    let headNode = SCNNode()
+    let cameraBaseNode = SCNNode() // To orient the camera base
+    let recenterNode = SCNNode() // To apply reset offsets
+    
+    let player: AVPlayer
     private let motionMgr = CMMotionManager()
     private let ipd: Float = 0.064
     private var vidMaterial: SCNMaterial?
     var skVideoNode: SKVideoNode?
 
-    // Cinema-specific
-    private var tvNode: SCNNode?
-    private var btnNode: SCNNode?
+    private var mainScreenNode: SCNNode?
+    private var controlPanelNode: SCNNode?
     private var crosshairNode: SCNNode?
-    private var gazeTimer: Timer?
+    
+    private var referenceAttitude: CMAttitude?
+    private var gazeTargetName: String?
     private var gazeStart: Date?
-    private var placeStart: Date?
 
     init(url: URL) {
         self.player = AVPlayer(url: url)
-        buildCameras()
-        buildVideoMaterial()
+
+        scene.background.contents = UIColor.black
+        
+        scene.rootNode.addChildNode(recenterNode)
+        recenterNode.addChildNode(cameraBaseNode)
+        cameraBaseNode.addChildNode(headNode)
+        
+        // Setup default base orientation
+        cameraBaseNode.eulerAngles = SCNVector3(Float.pi / 2, 0, 0)
+
+        let lc = SCNCamera()
+        lc.fieldOfView = 90
+        lc.zNear = 0.1
+        leftCam.camera = lc
+        leftCam.position = SCNVector3(-ipd / 2, 0, 0)
+        headNode.addChildNode(leftCam)
+
+        let rc = SCNCamera()
+        rc.fieldOfView = 90
+        rc.zNear = 0.1
+        rightCam.camera = rc
+        rightCam.position = SCNVector3(ipd / 2, 0, 0)
+        headNode.addChildNode(rightCam)
+
+        let chGeo = SCNSphere(radius: 0.012)
+        let chMat = SCNMaterial()
+        chMat.diffuse.contents = UIColor.white.withAlphaComponent(0.5)
+        chMat.emission.contents = UIColor.white.withAlphaComponent(0.3)
+        chGeo.firstMaterial = chMat
+        crosshairNode = SCNNode(geometry: chGeo)
+        crosshairNode?.position = SCNVector3(0, 0, -2.5)
+        headNode.addChildNode(crosshairNode!)
+
+        setupVideoMaterial()
         applyMode(.sideBySide)
         beginMotion()
-    }
-
-    deinit {
-        motionMgr.stopDeviceMotionUpdates()
-        gazeTimer?.invalidate()
-        player.pause()
-    }
-
-    // MARK: Cameras
-
-    private func buildCameras() {
-        let makeCamera: () -> SCNCamera = {
-            let c = SCNCamera()
-            c.fieldOfView = 90
-            c.zNear = 0.01
-            c.zFar = 200
-            return c
+        
+        // Loop video infinitely
+        NotificationCenter.default.addObserver(forName: .AVPlayerItemDidPlayToEndTime, object: player.currentItem, queue: .main) { [weak self] _ in
+            self?.player.seek(to: .zero)
+            self?.player.play()
         }
-        leftCam.camera = makeCamera()
-        leftCam.position = SCNVector3(-ipd / 2, 0, 0)
-        rightCam.camera = makeCamera()
-        rightCam.position = SCNVector3(ipd / 2, 0, 0)
-
-        headNode.addChildNode(leftCam)
-        headNode.addChildNode(rightCam)
-        scene.rootNode.addChildNode(headNode)
+        
+        // Gaze tick
+        Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
+            self?.tickGaze()
+        }
+    }
+    
+    deinit {
+        stopMotion()
+        NotificationCenter.default.removeObserver(self)
     }
 
-    // MARK: Video Material
-
-    private func buildVideoMaterial() {
+    private func setupVideoMaterial() {
         let vNode = SKVideoNode(avPlayer: player)
         vNode.size = CGSize(width: 1920, height: 1080)
         vNode.position = CGPoint(x: 960, y: 540)
         vNode.yScale = -1
-
         let skScene = SKScene(size: CGSize(width: 1920, height: 1080))
-        skScene.scaleMode = .aspectFit
         skScene.addChild(vNode)
+        self.skVideoNode = vNode
 
         let mat = SCNMaterial()
         mat.diffuse.contents = skScene
         mat.isDoubleSided = true
-        mat.lightingModel = .constant
         self.vidMaterial = mat
-        self.skVideoNode = vNode
     }
 
-    // MARK: Scene Switching
-
     func applyMode(_ mode: VRMode) {
-        // Clear everything except headNode
-        for child in scene.rootNode.childNodes where child !== headNode {
-            child.removeFromParentNode()
-        }
-        // Remove cinema crosshair from headNode
-        crosshairNode?.removeFromParentNode()
-        crosshairNode = nil
-        tvNode = nil
-        btnNode = nil
-        gazeTimer?.invalidate()
-        gazeTimer = nil
-        gazeStart = nil
-        placeStart = nil
-        gazeProgress = 0
+        currentMode = mode
         isPlacingTV = false
+        mainScreenNode?.removeFromParentNode()
+        controlPanelNode?.removeFromParentNode()
+        gazeTargetName = nil
+        
+        // Clear environment
+        scene.rootNode.childNodes.forEach {
+            if $0 != recenterNode && $0 != mainScreenNode && $0 != controlPanelNode {
+                $0.removeFromParentNode()
+            }
+        }
 
         switch mode {
         case .sideBySide: buildSBS()
-        case .spherical:  buildSpherical()
-        case .cinema:     buildCinema()
-        case .voidTheater: buildVoid()
+        case .spherical: buildSpherical()
+        case .cinema: buildCinema()
+        case .void: buildVoid()
         }
-
-        currentMode = mode
-        scene.background.contents = UIColor.black
+        
+        buildControlPanel()
+        
+        // Ensure playback continues when switching modes
+        if player.timeControlStatus != .playing {
+            player.play()
+            skVideoNode?.play()
+        }
     }
 
     // MARK: Mode 1 — Side-by-Side
 
     private func buildSBS() {
-        headNode.position = SCNVector3(0, 0, 0)
-
+        scene.background.contents = UIColor.black
+        
         let plane = SCNPlane(width: 4, height: 2.25)
         plane.firstMaterial = vidMaterial
-        let node = SCNNode(geometry: plane)
-        node.position = SCNVector3(0, 0, -5)
-        scene.rootNode.addChildNode(node)
+        mainScreenNode = SCNNode(geometry: plane)
+        mainScreenNode?.position = SCNVector3(0, 0, -3)
+        scene.rootNode.addChildNode(mainScreenNode!)
     }
 
     // MARK: Mode 2 — 360° / 180° Spherical
 
     private func buildSpherical() {
-        headNode.position = SCNVector3(0, 0, 0)
-
+        scene.background.contents = UIColor.black
+        
         let sphere = SCNSphere(radius: 50)
         sphere.segmentCount = 96
         sphere.firstMaterial = vidMaterial
-        let node = SCNNode(geometry: sphere)
-        node.scale = SCNVector3(-1, 1, 1)
-        scene.rootNode.addChildNode(node)
+        let sphereNode = SCNNode(geometry: sphere)
+        scene.rootNode.addChildNode(sphereNode)
+        
+        // Dummy screen node for control panel in 360 mode
+        mainScreenNode = SCNNode()
+        mainScreenNode?.position = SCNVector3(0, 0, -4)
+        scene.rootNode.addChildNode(mainScreenNode!)
     }
 
-    // MARK: Mode 3 — Virtual Cinema
+    // MARK: Mode 3 — Cinema
 
     private func buildCinema() {
-        headNode.position = SCNVector3(0, 1.2, 0)
+        scene.background.contents = UIColor(red: 0.08, green: 0.06, blue: 0.12, alpha: 1)
 
-        let darkWall = UIColor(red: 0.08, green: 0.06, blue: 0.12, alpha: 1)
-        let darkFloor = UIColor(red: 0.12, green: 0.10, blue: 0.08, alpha: 1)
+        let room = SCNNode()
 
-        func wallMat(_ color: UIColor) -> SCNMaterial {
-            let m = SCNMaterial()
-            m.diffuse.contents = color
-            m.lightingModel = .constant
-            return m
-        }
+        let floorGeo = SCNPlane(width: 10, height: 10)
+        floorGeo.firstMaterial?.diffuse.contents = UIColor(red: 0.15, green: 0.1, blue: 0.15, alpha: 1)
+        let floorNode = SCNNode(geometry: floorGeo)
+        floorNode.eulerAngles.x = -Float.pi / 2
+        floorNode.position.y = -1.5
+        room.addChildNode(floorNode)
 
-        // Floor
-        let floorGeo = SCNPlane(width: 8, height: 7)
-        floorGeo.firstMaterial = wallMat(darkFloor)
-        let floorN = SCNNode(geometry: floorGeo)
-        floorN.eulerAngles.x = -.pi / 2
-        floorN.position = SCNVector3(0, 0, -2.5)
-        scene.rootNode.addChildNode(floorN)
-
-        // Back wall
-        let backGeo = SCNPlane(width: 8, height: 4)
-        backGeo.firstMaterial = wallMat(darkWall)
-        let backN = SCNNode(geometry: backGeo)
-        backN.position = SCNVector3(0, 2, -6)
-        scene.rootNode.addChildNode(backN)
-
-        // Ceiling
-        let ceilGeo = SCNPlane(width: 8, height: 7)
-        ceilGeo.firstMaterial = wallMat(UIColor(red: 0.05, green: 0.04, blue: 0.08, alpha: 1))
-        let ceilN = SCNNode(geometry: ceilGeo)
-        ceilN.eulerAngles.x = .pi / 2
-        ceilN.position = SCNVector3(0, 4, -2.5)
-        scene.rootNode.addChildNode(ceilN)
-
-        // Left wall
-        let lwGeo = SCNPlane(width: 7, height: 4)
-        lwGeo.firstMaterial = wallMat(darkWall)
-        let lwN = SCNNode(geometry: lwGeo)
-        lwN.eulerAngles.y = .pi / 2
-        lwN.position = SCNVector3(-4, 2, -2.5)
-        scene.rootNode.addChildNode(lwN)
-
-        // Right wall
-        let rwGeo = SCNPlane(width: 7, height: 4)
-        rwGeo.firstMaterial = wallMat(darkWall)
-        let rwN = SCNNode(geometry: rwGeo)
-        rwN.eulerAngles.y = -.pi / 2
-        rwN.position = SCNVector3(4, 2, -2.5)
-        scene.rootNode.addChildNode(rwN)
-
-        // Bed
         let bedGeo = SCNBox(width: 2, height: 0.4, length: 2.2, chamferRadius: 0.05)
-        let bedMat = SCNMaterial()
-        bedMat.diffuse.contents = UIColor(red: 0.35, green: 0.25, blue: 0.20, alpha: 1)
-        bedMat.lightingModel = .constant
-        bedGeo.firstMaterial = bedMat
-        let bedN = SCNNode(geometry: bedGeo)
-        bedN.position = SCNVector3(0, 0.2, 0)
-        scene.rootNode.addChildNode(bedN)
+        bedGeo.firstMaterial?.diffuse.contents = UIColor.darkGray
+        let bed = SCNNode(geometry: bedGeo)
+        bed.position = SCNVector3(0, -1.3, 0)
+        room.addChildNode(bed)
 
-        // TV Screen (3m wide, 16:9)
         let tvW: CGFloat = 3.0
-        let tvH: CGFloat = 1.6875
-        let tvGeo = SCNPlane(width: tvW, height: tvH)
+        let tvGeo = SCNPlane(width: tvW, height: tvW * (9/16))
         tvGeo.firstMaterial = vidMaterial
-        let tv = SCNNode(geometry: tvGeo)
-        tv.position = SCNVector3(0, 2.2, -5.8)
-        tv.name = "tvScreen"
-        scene.rootNode.addChildNode(tv)
-        self.tvNode = tv
+        mainScreenNode = SCNNode(geometry: tvGeo)
+        mainScreenNode?.position = SCNVector3(0, 0.5, -3.5)
+        room.addChildNode(mainScreenNode!)
 
-        // TV frame glow
-        let glowGeo = SCNPlane(width: tvW + 0.2, height: tvH + 0.2)
-        let glowMat = SCNMaterial()
-        glowMat.diffuse.contents = UIColor(red: 0.1, green: 0.2, blue: 0.4, alpha: 1)
-        glowMat.lightingModel = .constant
-        glowGeo.firstMaterial = glowMat
-        let glowN = SCNNode(geometry: glowGeo)
-        glowN.position = SCNVector3(0, 2.2, -5.82)
-        scene.rootNode.addChildNode(glowN)
+        let light = SCNLight()
+        light.type = .ambient
+        light.intensity = 200
+        let lNode = SCNNode()
+        lNode.light = light
+        room.addChildNode(lNode)
 
-        // TV light casting into the room
-        let tvLight = SCNLight()
-        tvLight.type = .omni
-        tvLight.color = UIColor(red: 0.3, green: 0.4, blue: 0.7, alpha: 1)
-        tvLight.intensity = 250
-        tvLight.attenuationStartDistance = 1
-        tvLight.attenuationEndDistance = 6
-        let lightN = SCNNode()
-        lightN.light = tvLight
-        lightN.position = SCNVector3(0, 2.2, -5.5)
-        scene.rootNode.addChildNode(lightN)
+        let dl = SCNLight()
+        dl.type = .directional
+        dl.intensity = 500
+        let dlN = SCNNode()
+        dlN.light = dl
+        dlN.eulerAngles = SCNVector3(-Float.pi / 4, Float.pi / 4, 0)
+        room.addChildNode(dlN)
 
-        // Reposition button (below TV)
-        let btnGeo = SCNBox(width: 0.5, height: 0.12, length: 0.02, chamferRadius: 0.03)
-        let btnMat = SCNMaterial()
-        btnMat.diffuse.contents = UIColor(red: 0.15, green: 0.45, blue: 1.0, alpha: 0.8)
-        btnMat.lightingModel = .constant
-        btnGeo.firstMaterial = btnMat
-        let btn = SCNNode(geometry: btnGeo)
-        btn.position = SCNVector3(0, 2.2 - Float(tvH) / 2 - 0.2, -5.78)
-        btn.name = "repositionBtn"
-        scene.rootNode.addChildNode(btn)
-        self.btnNode = btn
-
-        // Crosshair (small sphere at gaze center)
-        let chGeo = SCNSphere(radius: 0.012)
-        let chMat = SCNMaterial()
-        chMat.diffuse.contents = UIColor.white.withAlphaComponent(0.5)
-        chMat.lightingModel = .constant
-        chMat.writesToDepthBuffer = false
-        chMat.readsFromDepthBuffer = false
-        chGeo.firstMaterial = chMat
-        let ch = SCNNode(geometry: chGeo)
-        ch.position = SCNVector3(0, 0, -3)
-        ch.renderingOrder = 100
-        headNode.addChildNode(ch)
-        self.crosshairNode = ch
-
-        // Ambient
-        let ambient = SCNLight()
-        ambient.type = .ambient
-        ambient.color = UIColor(white: 0.04, alpha: 1)
-        let ambN = SCNNode()
-        ambN.light = ambient
-        scene.rootNode.addChildNode(ambN)
-
-        // Start gaze loop
-        gazeTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
-            self?.tickGaze()
-        }
-    }
-
-    // MARK: Gaze Detection (Cinema)
-
-    private func tickGaze() {
-        guard currentMode == .cinema else { return }
-
-        let fwd = headNode.convertVector(SCNVector3(0, 0, -1), to: nil)
-        let hPos = headNode.worldPosition
-
-        // Normalize forward
-        let fLen = sqrtf(fwd.x * fwd.x + fwd.y * fwd.y + fwd.z * fwd.z)
-        let fN = SCNVector3(fwd.x / fLen, fwd.y / fLen, fwd.z / fLen)
-
-        if isPlacingTV {
-            handlePlacing(forward: fN, headPos: hPos)
-        } else {
-            handleGazing(forward: fN, headPos: hPos)
-        }
-    }
-
-    private func handleGazing(forward fN: SCNVector3, headPos hPos: SCNVector3) {
-        guard let btn = btnNode else { return }
-        let bPos = btn.worldPosition
-
-        // Direction to button
-        let toB = SCNVector3(bPos.x - hPos.x, bPos.y - hPos.y, bPos.z - hPos.z)
-        let bLen = sqrtf(toB.x * toB.x + toB.y * toB.y + toB.z * toB.z)
-        guard bLen > 0.001 else { return }
-        let bN = SCNVector3(toB.x / bLen, toB.y / bLen, toB.z / bLen)
-
-        let dot = fN.x * bN.x + fN.y * bN.y + fN.z * bN.z
-        let lookingAtBtn = dot > 0.98
-
-        if lookingAtBtn {
-            if gazeStart == nil { gazeStart = Date() }
-            let elapsed = Date().timeIntervalSince(gazeStart!)
-            let prog = min(elapsed / 4.0, 1.0)
-            gazeProgress = CGFloat(prog)
-
-            // Pulse crosshair cyan
-            crosshairNode?.geometry?.firstMaterial?.diffuse.contents =
-                UIColor(red: 0.2, green: CGFloat(0.6 + prog * 0.4), blue: 1.0, alpha: CGFloat(0.5 + prog * 0.5))
-            crosshairNode?.scale = SCNVector3(1 + Float(prog) * 0.6, 1 + Float(prog) * 0.6, 1)
-
-            // Pulse button
-            btn.geometry?.firstMaterial?.diffuse.contents =
-                UIColor(red: CGFloat(0.15 + prog * 0.85), green: CGFloat(0.45 - prog * 0.2), blue: CGFloat(1.0 - prog * 0.7), alpha: 0.9)
-
-            if prog >= 1.0 {
-                // Enter placement mode
-                isPlacingTV = true
-                gazeStart = nil
-                gazeProgress = 0
-                crosshairNode?.geometry?.firstMaterial?.diffuse.contents =
-                    UIColor(red: 1.0, green: 0.5, blue: 0.1, alpha: 0.8)
-                btn.geometry?.firstMaterial?.diffuse.contents =
-                    UIColor(red: 1.0, green: 0.5, blue: 0.1, alpha: 0.9)
-            }
-        } else {
-            gazeStart = nil
-            gazeProgress = 0
-            crosshairNode?.geometry?.firstMaterial?.diffuse.contents = UIColor.white.withAlphaComponent(0.5)
-            crosshairNode?.scale = SCNVector3(1, 1, 1)
-            btn.geometry?.firstMaterial?.diffuse.contents =
-                UIColor(red: 0.15, green: 0.45, blue: 1.0, alpha: 0.8)
-        }
-    }
-
-    private func handlePlacing(forward fN: SCNVector3, headPos hPos: SCNVector3) {
-        if placeStart == nil { placeStart = Date() }
-        let elapsed = Date().timeIntervalSince(placeStart!)
-        let prog = min(elapsed / 4.0, 1.0)
-        gazeProgress = CGFloat(prog)
-
-        // Green pulse on crosshair
-        crosshairNode?.geometry?.firstMaterial?.diffuse.contents =
-            UIColor(red: CGFloat(0.2 - prog * 0.2), green: CGFloat(0.6 + prog * 0.4), blue: CGFloat(0.2), alpha: CGFloat(0.6 + prog * 0.4))
-        crosshairNode?.scale = SCNVector3(1 + Float(prog) * 0.8, 1 + Float(prog) * 0.8, 1)
-
-        if prog >= 1.0 {
-            // Place TV 4m from head in gaze direction
-            let dist: Float = 4.0
-            let newPos = SCNVector3(
-                hPos.x + fN.x * dist,
-                hPos.y + fN.y * dist,
-                hPos.z + fN.z * dist
-            )
-
-            SCNTransaction.begin()
-            SCNTransaction.animationDuration = 0.8
-
-            tvNode?.position = newPos
-            // Orient TV to face viewer (rotate around Y only)
-            let dx = hPos.x - newPos.x
-            let dz = hPos.z - newPos.z
-            tvNode?.eulerAngles = SCNVector3(0, atan2(dx, dz), 0)
-
-            // Move button below new TV position
-            if let btn = btnNode {
-                let tvH = Float((tvNode?.geometry as? SCNPlane)?.height ?? 1.6875)
-                btn.position = SCNVector3(newPos.x, newPos.y - tvH / 2 - 0.2, newPos.z)
-                btn.eulerAngles = tvNode?.eulerAngles ?? SCNVector3(0, 0, 0)
-                // Push button slightly toward viewer
-                btn.position.x += fN.x * (-0.03)
-                btn.position.z += fN.z * (-0.03)
-            }
-
-            SCNTransaction.commit()
-
-            // Reset state
-            isPlacingTV = false
-            placeStart = nil
-            gazeProgress = 0
-            crosshairNode?.geometry?.firstMaterial?.diffuse.contents = UIColor.white.withAlphaComponent(0.5)
-            crosshairNode?.scale = SCNVector3(1, 1, 1)
-            btnNode?.geometry?.firstMaterial?.diffuse.contents =
-                UIColor(red: 0.15, green: 0.45, blue: 1.0, alpha: 0.8)
-        }
+        scene.rootNode.addChildNode(room)
     }
 
     // MARK: Mode 4 — Void Theater
 
     private func buildVoid() {
-        headNode.position = SCNVector3(0, 0, 0)
+        scene.background.contents = UIColor.black
 
-        // Giant IMAX-style screen
         let screenW: CGFloat = 14
-        let screenH: CGFloat = 7.875 // 16:9
-        let screenGeo = SCNPlane(width: screenW, height: screenH)
-        screenGeo.firstMaterial = vidMaterial
-        let screenN = SCNNode(geometry: screenGeo)
-        screenN.position = SCNVector3(0, 0, -9)
-        scene.rootNode.addChildNode(screenN)
+        let screen = SCNPlane(width: screenW, height: screenW * (9/16))
+        screen.cornerRadius = 0.5
+        screen.firstMaterial = vidMaterial
+        mainScreenNode = SCNNode(geometry: screen)
+        mainScreenNode?.position = SCNVector3(0, 0, -8)
+        scene.rootNode.addChildNode(mainScreenNode!)
 
-        // Glow plane behind screen
-        let glowGeo = SCNPlane(width: screenW + 1.5, height: screenH + 1.5)
-        let glowMat = SCNMaterial()
-        glowMat.diffuse.contents = UIColor(red: 0.05, green: 0.02, blue: 0.15, alpha: 1)
-        glowMat.lightingModel = .constant
-        glowGeo.firstMaterial = glowMat
-        let glowN = SCNNode(geometry: glowGeo)
-        glowN.position = SCNVector3(0, 0, -9.1)
-        scene.rootNode.addChildNode(glowN)
-
-        // Edge glow light
-        let screenLight = SCNLight()
-        screenLight.type = .omni
-        screenLight.color = UIColor(red: 0.2, green: 0.1, blue: 0.5, alpha: 1)
-        screenLight.intensity = 300
-        screenLight.attenuationStartDistance = 2
-        screenLight.attenuationEndDistance = 12
-        let sLightN = SCNNode()
-        sLightN.light = screenLight
-        sLightN.position = SCNVector3(0, 0, -8)
-        scene.rootNode.addChildNode(sLightN)
-
-        // Star particles
         let stars = SCNParticleSystem()
-        stars.birthRate = 30
-        stars.particleLifeSpan = 200
-        stars.warmupDuration = 200
-        stars.particleSize = 0.04
-        stars.particleSizeVariation = 0.03
         stars.particleColor = .white
-        stars.particleColorVariation = SCNVector4(0.1, 0.1, 0.3, 0)
-        stars.emitterShape = SCNSphere(radius: 60)
+        stars.particleSize = 0.05
+        stars.birthRate = 200
+        stars.particleLifeSpan = 10
+        stars.emissionDuration = 0
+        stars.emitterShape = SCNSphere(radius: 30)
         stars.birthLocation = .volume
         stars.particleVelocity = 0
         stars.isAffectedByGravity = false
@@ -487,17 +271,122 @@ class VRSceneManager: ObservableObject {
         let starsN = SCNNode()
         starsN.addParticleSystem(stars)
         scene.rootNode.addChildNode(starsN)
+    }
+    
+    // MARK: Control Panel
+    private func buildControlPanel() {
+        let panel = SCNNode()
+        let actions = ["Pause", "Resume", "Move", "Reset"]
+        let btnWidth: Float = 0.8
+        let spacing: Float = 0.2
+        
+        for (i, action) in actions.enumerated() {
+            let btnGeo = SCNPlane(width: CGFloat(btnWidth), height: 0.3)
+            btnGeo.cornerRadius = 0.05
+            btnGeo.firstMaterial?.diffuse.contents = UIColor.purple.withAlphaComponent(0.8)
+            let btn = SCNNode(geometry: btnGeo)
+            btn.name = "btn_\(action)"
+            
+            let textGeo = SCNText(string: action, extrusionDepth: 0.0)
+            textGeo.font = UIFont.boldSystemFont(ofSize: 0.15)
+            textGeo.firstMaterial?.diffuse.contents = UIColor.white
+            textGeo.alignmentMode = CATextLayerAlignmentMode.center.rawValue
+            
+            let textNode = SCNNode(geometry: textGeo)
+            let (min, max) = textNode.boundingBox
+            let tw = Float(max.x - min.x)
+            let th = Float(max.y - min.y)
+            textNode.position = SCNVector3(-tw/2, -th/2, 0.01)
+            btn.addChildNode(textNode)
+            
+            let xPos = Float(i) * (btnWidth + spacing) - Float(actions.count - 1) * (btnWidth + spacing) / 2.0
+            btn.position = SCNVector3(xPos, 0, 0)
+            panel.addChildNode(btn)
+        }
+        
+        controlPanelNode = panel
+        if let ms = mainScreenNode {
+            let h = Float((ms.geometry as? SCNPlane)?.height ?? 2.0)
+            panel.position = SCNVector3(0, -h/2 - 0.4, 0.05)
+            ms.addChildNode(panel)
+        }
+    }
 
-        // Far nebula background sphere
-        let nebGeo = SCNSphere(radius: 90)
-        nebGeo.segmentCount = 32
-        let nebMat = SCNMaterial()
-        nebMat.diffuse.contents = UIColor(red: 0.02, green: 0.01, blue: 0.05, alpha: 1)
-        nebMat.lightingModel = .constant
-        nebMat.isDoubleSided = true
-        nebGeo.firstMaterial = nebMat
-        let nebN = SCNNode(geometry: nebGeo)
-        scene.rootNode.addChildNode(nebN)
+    // MARK: Gaze Interaction
+
+    @objc private func tickGaze() {
+        let p1 = leftCam.worldPosition
+        let fwd = headNode.convertVector(SCNVector3(0, 0, -1), to: nil)
+        let p2 = SCNVector3(p1.x + fwd.x * 50, p1.y + fwd.y * 50, p1.z + fwd.z * 50)
+
+        var hitPoint = SCNVector3(0,0,0)
+        var currentTarget: String? = nil
+
+        if isPlacingTV {
+            currentTarget = "moving_target"
+            // Place exactly where looking, 5 units away
+            hitPoint = SCNVector3(p1.x + fwd.x * 5, p1.y + fwd.y * 5, p1.z + fwd.z * 5)
+        } else {
+            let hits = scene.rootNode.hitTestWithSegment(from: p1, to: p2, options: [.firstFoundOnly: true])
+            if let hit = hits.first, let name = hit.node.name, name.starts(with: "btn_") {
+                currentTarget = name
+                hitPoint = hit.worldCoordinates
+            }
+        }
+
+        if currentTarget != gazeTargetName {
+            gazeTargetName = currentTarget
+            gazeStart = Date()
+            crosshairNode?.geometry?.firstMaterial?.diffuse.contents = UIColor.white.withAlphaComponent(0.5)
+            DispatchQueue.main.async { self.gazeProgress = 0 }
+        }
+
+        if let target = gazeTargetName, let start = gazeStart {
+            let elapsed = Date().timeIntervalSince(start)
+            let threshold: TimeInterval = isPlacingTV ? 4.0 : 2.0
+            
+            DispatchQueue.main.async { self.gazeProgress = CGFloat(min(1.0, elapsed / threshold)) }
+            
+            if elapsed >= threshold {
+                executeGazeAction(action: target, point: hitPoint)
+                gazeTargetName = nil
+                gazeStart = nil
+                crosshairNode?.geometry?.firstMaterial?.diffuse.contents = UIColor.white.withAlphaComponent(0.5)
+                DispatchQueue.main.async { self.gazeProgress = 0 }
+            } else {
+                let ratio = CGFloat(elapsed / threshold)
+                crosshairNode?.geometry?.firstMaterial?.diffuse.contents = UIColor(red: 1-ratio, green: 1, blue: 1-ratio, alpha: 0.8)
+            }
+        }
+    }
+    
+    private func executeGazeAction(action: String, point: SCNVector3) {
+        switch action {
+        case "moving_target":
+            isPlacingTV = false
+            mainScreenNode?.position = point
+            // face the user
+            let hPos = headNode.worldPosition
+            let dx = hPos.x - point.x
+            let dz = hPos.z - point.z
+            let dy = hPos.y - point.y
+            let yaw = atan2(dx, dz)
+            let distXZ = sqrt(dx*dx + dz*dz)
+            let pitch = atan2(dy, distXZ)
+            mainScreenNode?.eulerAngles = SCNVector3(-pitch, yaw, 0)
+        case "btn_Pause":
+            player.pause()
+        case "btn_Resume":
+            player.play()
+        case "btn_Move":
+            if currentMode != .spherical {
+                isPlacingTV = true
+            }
+        case "btn_Reset":
+            referenceAttitude = nil
+        default:
+            break
+        }
     }
 
     // MARK: Motion Tracking
@@ -505,12 +394,22 @@ class VRSceneManager: ObservableObject {
     func beginMotion() {
         guard motionMgr.isDeviceMotionAvailable else { return }
         motionMgr.deviceMotionUpdateInterval = 1.0 / 60.0
-        motionMgr.startDeviceMotionUpdates(using: .xArbitraryCorrectedZVertical, to: .main) { [weak self] motion, _ in
+        motionMgr.startDeviceMotionUpdates(to: .main) { [weak self] motion, _ in
             guard let self = self, let m = motion else { return }
-            let q = m.attitude.quaternion
-            self.headNode.orientation = SCNQuaternion(
-                Float(-q.y), Float(q.x), Float(q.z), Float(q.w)
-            )
+            
+            // We use attitude copying to prevent mutating the shared reference
+            if self.referenceAttitude == nil {
+                self.referenceAttitude = m.attitude.copy() as? CMAttitude
+            }
+            
+            if let ref = self.referenceAttitude, let current = m.attitude.copy() as? CMAttitude {
+                current.multiply(byInverseOf: ref)
+                let q = current.quaternion
+                
+                // For Landscape Right orientation, we map Device axes to SceneKit Camera axes:
+                // Device pitch/yaw/roll mapped to SCNQuaternion
+                self.headNode.orientation = SCNQuaternion(Float(-q.y), Float(q.x), Float(q.z), Float(q.w))
+            }
         }
     }
 
@@ -631,11 +530,24 @@ struct VRPlayerView: View {
         .onAppear {
             mgr.player.play()
             mgr.skVideoNode?.play()
+            
+            // Force Landscape Orientation
+            if #available(iOS 16.0, *) {
+                guard let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene else { return }
+                windowScene.requestGeometryUpdate(.iOS(interfaceOrientations: .landscapeRight))
+            }
+            
             DispatchQueue.main.asyncAfter(deadline: .now() + 4) {
                 withAnimation { showUI = false }
             }
         }
         .onDisappear {
+            // Restore Portrait Orientation
+            if #available(iOS 16.0, *) {
+                guard let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene else { return }
+                windowScene.requestGeometryUpdate(.iOS(interfaceOrientations: .portrait))
+            }
+            
             mgr.stopMotion()
             mgr.player.pause()
         }
@@ -703,12 +615,12 @@ struct VRPlayerView: View {
 
     private var gazeBar: some View {
         Group {
-            if mgr.currentMode == .cinema && mgr.gazeProgress > 0 {
+            if mgr.gazeProgress > 0 {
                 HStack(spacing: 6) {
                     Circle()
                         .fill(mgr.isPlacingTV ? Color.green : Color.cyan)
                         .frame(width: 8, height: 8)
-                    Text(mgr.isPlacingTV ? "Look at new spot..." : "Hold gaze...")
+                    Text(mgr.isPlacingTV ? "Look at new spot..." : "Triggering Action...")
                         .font(.system(size: 11, weight: .medium))
                         .foregroundColor(.white)
                     GeometryReader { geo in
@@ -745,12 +657,12 @@ struct VRPlayerView: View {
     private var placingHint: some View {
         VStack {
             Spacer()
-            Text("🎯 Look where you want the TV, hold for 4s")
-                .font(.system(size: 12, weight: .medium))
-                .foregroundColor(.orange)
+            Text("📍 Look where you want the screen, hold for 4s")
+                .font(.system(size: 12, weight: .bold))
+                .foregroundColor(.green)
                 .padding(.horizontal, 16)
-                .padding(.vertical, 8)
-                .background(Color.black.opacity(0.75))
+                .padding(.vertical, 10)
+                .background(Color.black.opacity(0.85))
                 .cornerRadius(10)
                 .padding(.bottom, 80)
         }
