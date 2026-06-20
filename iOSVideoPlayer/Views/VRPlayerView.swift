@@ -65,6 +65,7 @@ class VRSceneManager: ObservableObject {
     private var scaleLabelNode: SKLabelNode?
     @Published var screenScale: Float = 1.0
     
+    private var referenceAttitude: CMAttitude?
     private var gazeTargetName: String?
     private var gazeStart: Date?
 
@@ -301,6 +302,7 @@ class VRSceneManager: ObservableObject {
                 label.verticalAlignmentMode = .center
                 label.horizontalAlignmentMode = .center
                 label.position = CGPoint(x: sceneWidth / 2, y: 30)
+                label.zRotation = .pi // Fix upside down and backward text
                 skScene.addChild(label)
                 
                 if action == "Mute" { self.muteLabelNode = label }
@@ -417,6 +419,7 @@ class VRSceneManager: ObservableObject {
                 isPlacingTV = true
             }
         case "btn_Reset":
+            self.referenceAttitude = nil
             SCNTransaction.begin()
             SCNTransaction.animationDuration = 0.5
             worldNode.eulerAngles = SCNVector3(0, 0, 0)
@@ -437,18 +440,28 @@ class VRSceneManager: ObservableObject {
     // MARK: Motion Tracking
 
     func beginMotion() {
+        referenceAttitude = nil
         guard motionMgr.isDeviceMotionAvailable else { return }
         motionMgr.deviceMotionUpdateInterval = 1.0 / 60.0
         motionMgr.startDeviceMotionUpdates(to: .main) { [weak self] motion, _ in
             guard let self = self, let m = motion else { return }
             
-            let q = m.attitude.quaternion
-            let qx = Float(q.x)
-            let qy = Float(q.y)
-            let qz = Float(q.z)
-            let qw = Float(q.w)
+            if self.referenceAttitude == nil {
+                self.referenceAttitude = m.attitude.copy() as? CMAttitude
+            }
             
-            self.cameraBaseNode.orientation = SCNQuaternion(x: qy, y: -qx, z: qz, w: qw)
+            if let ref = self.referenceAttitude, let current = m.attitude.copy() as? CMAttitude {
+                current.multiply(byInverseOf: ref)
+                let q = current.quaternion
+                let qx = Float(q.x)
+                let qy = Float(q.y)
+                let qz = Float(q.z)
+                let qw = Float(q.w)
+                
+                // For Landscape Right: physical X is UP, Y is LEFT.
+                // Camera X is RIGHT, Y is UP.
+                self.cameraBaseNode.orientation = SCNQuaternion(x: -qy, y: qx, z: qz, w: qw)
+            }
         }
     }
 
