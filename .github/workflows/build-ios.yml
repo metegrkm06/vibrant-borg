@@ -31,7 +31,15 @@ jobs:
             CODE_SIGNING_REQUIRED=YES \
             CODE_SIGN_IDENTITY="-" \
             AD_HOC_CODE_SIGNING_ALLOWED=YES \
-            ONLY_ACTIVE_ARCH=NO
+            ONLY_ACTIVE_ARCH=NO | tee build.log
+            
+      - name: Show compile errors
+        if: failure()
+        run: |
+          echo "==== COMPILE ERRORS ===="
+          grep -i "error:" build.log || true
+          echo "==== COMPILE WARNINGS ===="
+          grep -i "warning:" build.log || true
 
       - name: Package IPA
         run: |
