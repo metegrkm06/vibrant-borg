@@ -301,7 +301,6 @@ class VRSceneManager: ObservableObject {
                 label.verticalAlignmentMode = .center
                 label.horizontalAlignmentMode = .center
                 label.position = CGPoint(x: sceneWidth / 2, y: 30)
-                label.yScale = -1 // Fix upside down text
                 skScene.addChild(label)
                 
                 if action == "Mute" { self.muteLabelNode = label }
