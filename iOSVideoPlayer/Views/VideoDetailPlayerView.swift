@@ -1,15 +1,18 @@
 import SwiftUI
 import AVKit
+import AVFoundation
 
 struct CustomPlayerView: UIViewRepresentable {
     let player: AVPlayer
+    let videoGravity: AVLayerVideoGravity
     
     func makeUIView(context: Context) -> PlayerUIView {
-        return PlayerUIView(player: player)
+        return PlayerUIView(player: player, videoGravity: videoGravity)
     }
     
     func updateUIView(_ uiView: PlayerUIView, context: Context) {
         uiView.player = player
+        uiView.setVideoGravity(videoGravity)
     }
 }
 
@@ -27,14 +30,18 @@ class PlayerUIView: UIView {
         return AVPlayerLayer.self
     }
     
-    init(player: AVPlayer) {
+    init(player: AVPlayer, videoGravity: AVLayerVideoGravity) {
         super.init(frame: .zero)
         self.player = player
-        playerLayer.videoGravity = .resizeAspect
+        playerLayer.videoGravity = videoGravity
     }
     
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
+    }
+    
+    func setVideoGravity(_ gravity: AVLayerVideoGravity) {
+        playerLayer.videoGravity = gravity
     }
 }
 
@@ -50,6 +57,11 @@ struct VideoDetailPlayerView: View {
     @State private var isDraggingSlider = false
     @State private var showControls = true
     
+    // Custom feature states
+    @State private var isMuted = false
+    @State private var playbackSpeed: Float = 1.0
+    @State private var isAspectFill = false
+    
     private let timer = Timer.publish(every: 0.5, on: .main, in: .common).autoconnect()
     
     init(url: URL, title: String) {
@@ -62,8 +74,8 @@ struct VideoDetailPlayerView: View {
         ZStack {
             Color.black.ignoresSafeArea()
             
-            // Full Screen Video layer
-            CustomPlayerView(player: player)
+            // Full Screen Video layer with dynamic aspect ratio gravity
+            CustomPlayerView(player: player, videoGravity: isAspectFill ? .resizeAspectFill : .resizeAspect)
                 .onTapGesture {
                     withAnimation {
                         showControls.toggle()
@@ -94,6 +106,36 @@ struct VideoDetailPlayerView: View {
                             .padding(.leading, 8)
                         
                         Spacer()
+                        
+                        // Feature 1: Aspect Ratio/Crop Toggle (Aspect Fit vs Aspect Fill)
+                        Button(action: toggleAspectRatio) {
+                            Image(systemName: isAspectFill ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right.and.arrow.up.right.and.arrow.down.left")
+                                .font(.title3)
+                                .foregroundColor(.white)
+                                .padding(12)
+                                .background(Color.black.opacity(0.6))
+                                .clipShape(Circle())
+                        }
+                        
+                        // Feature 2: Playback Speed Control (1.0x, 1.25x, 1.5x, 2.0x)
+                        Button(action: cycleSpeed) {
+                            Text(String(format: "%.2fx", playbackSpeed))
+                                .font(.system(size: 12, weight: .bold))
+                                .foregroundColor(.white)
+                                .frame(width: 44, height: 44)
+                                .background(Color.black.opacity(0.6))
+                                .clipShape(Circle())
+                        }
+                        
+                        // Toggle Mute / Sound Button
+                        Button(action: toggleMute) {
+                            Image(systemName: isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                                .font(.title3)
+                                .foregroundColor(.white)
+                                .padding(12)
+                                .background(Color.black.opacity(0.6))
+                                .clipShape(Circle())
+                        }
                     }
                     .padding()
                     
@@ -175,10 +217,11 @@ struct VideoDetailPlayerView: View {
         .onAppear {
             player.play()
             isPlaying = true
+            player.rate = playbackSpeed
+            player.isMuted = isMuted
             
             if let item = player.currentItem {
                 let asset = item.asset
-                // Safe duration calculation
                 if #available(iOS 15.0, *) {
                     Task {
                         if let dur = try? await asset.load(.duration) {
@@ -213,8 +256,31 @@ struct VideoDetailPlayerView: View {
             player.pause()
         } else {
             player.play()
+            player.rate = playbackSpeed
         }
         isPlaying.toggle()
+    }
+    
+    private func toggleMute() {
+        isMuted.toggle()
+        player.isMuted = isMuted
+    }
+    
+    private func cycleSpeed() {
+        let speeds: [Float] = [1.0, 1.25, 1.5, 2.0]
+        if let idx = speeds.firstIndex(of: playbackSpeed) {
+            let nextIdx = (idx + 1) % speeds.count
+            playbackSpeed = speeds[nextIdx]
+            if isPlaying {
+                player.rate = playbackSpeed
+            }
+        }
+    }
+    
+    private func toggleAspectRatio() {
+        withAnimation {
+            isAspectFill.toggle()
+        }
     }
     
     private func skip(by seconds: Double) {
@@ -227,6 +293,9 @@ struct VideoDetailPlayerView: View {
         let time = CMTime(seconds: seconds, preferredTimescale: 600)
         player.seek(to: time)
         currentTime = seconds
+        if isPlaying {
+            player.rate = playbackSpeed
+        }
     }
     
     private func formatTime(_ seconds: Double) -> String {
