@@ -483,7 +483,7 @@ class VRSceneManager: ObservableObject {
         stars.birthLocation = .volume
         stars.particleVelocity = 0
         stars.isAffectedByGravity = false
-        stars.blendMode = .add
+        stars.blendMode = .additive
         let starsN = SCNNode()
         starsN.addParticleSystem(stars)
         scene.rootNode.addChildNode(starsN)
