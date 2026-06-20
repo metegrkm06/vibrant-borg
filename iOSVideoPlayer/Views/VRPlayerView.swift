@@ -77,9 +77,6 @@ class VRSceneManager: ObservableObject {
         scene.rootNode.addChildNode(recenterNode)
         recenterNode.addChildNode(cameraBaseNode)
         cameraBaseNode.addChildNode(headNode)
-        
-        // Setup default base orientation
-        cameraBaseNode.eulerAngles = SCNVector3(Float.pi / 2, 0, 0)
 
         let lc = SCNCamera()
         lc.fieldOfView = 90
@@ -259,12 +256,12 @@ class VRSceneManager: ObservableObject {
 
         let stars = SCNParticleSystem()
         stars.particleColor = .white
-        stars.particleSize = 0.05
-        stars.birthRate = 200
-        stars.particleLifeSpan = 10
+        stars.particleSize = 0.04
+        stars.birthRate = 80
+        stars.particleLifeSpan = 15
         stars.emissionDuration = 0
-        stars.emitterShape = SCNSphere(radius: 30)
-        stars.birthLocation = .volume
+        stars.emitterShape = SCNSphere(radius: 40)
+        stars.birthLocation = .surface
         stars.particleVelocity = 0
         stars.isAffectedByGravity = false
         stars.blendMode = .additive
