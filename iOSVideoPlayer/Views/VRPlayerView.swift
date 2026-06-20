@@ -65,6 +65,8 @@ class VRSceneManager: ObservableObject {
     private var controlPanelNode: SCNNode?
     private var crosshairNode: SCNNode?
     private var muteLabelNode: SKLabelNode?
+    private var scaleLabelNode: SKLabelNode?
+    @Published var screenScale: Float = 1.0
     
     private var referenceAttitude: CMAttitude?
     private var gazeTargetName: String?
@@ -277,30 +279,34 @@ class VRSceneManager: ObservableObject {
     // MARK: Control Panel
     private func buildControlPanel() {
         let panel = SCNNode()
-        let actions = ["Pause", "Resume", "Mute", "Move", "Reset"]
-        let btnWidth: Float = 0.8
-        let spacing: Float = 0.2
+        let actions = ["Pause", "Resume", "Mute", "-", "1.0x", "+", "Move", "Reset"]
+        let btnWidth: Float = 0.6
+        let spacing: Float = 0.15
         
         for (i, action) in actions.enumerated() {
-            let btnGeo = SCNPlane(width: CGFloat(btnWidth), height: 0.3)
+            let btnGeo = SCNPlane(width: CGFloat(btnWidth), height: 0.25)
             btnGeo.cornerRadius = 0.05
             
-            let skScene = SKScene(size: CGSize(width: 200, height: 80))
+            let skScene = SKScene(size: CGSize(width: 150, height: 60))
             skScene.backgroundColor = UIColor(white: 0.2, alpha: 0.9)
             
-            let labelText = (action == "Mute") ? (player.isMuted ? "Unmute" : "Mute") : action
+            let labelText: String
+            if action == "Mute" { labelText = player.isMuted ? "Unmute" : "Mute" }
+            else if action == "1.0x" { labelText = String(format: "%.1fx", screenScale) }
+            else { labelText = action }
+            
             let label = SKLabelNode(text: labelText)
             label.fontName = "HelveticaNeue-Bold"
-            label.fontSize = 32
+            label.fontSize = 24
             label.fontColor = .white
             label.verticalAlignmentMode = .center
             label.horizontalAlignmentMode = .center
-            label.position = CGPoint(x: 100, y: 40)
+            label.position = CGPoint(x: 75, y: 30)
+            label.xScale = -1 // Fix reversed text
             skScene.addChild(label)
             
-            if action == "Mute" {
-                self.muteLabelNode = label
-            }
+            if action == "Mute" { self.muteLabelNode = label }
+            if action == "1.0x" { self.scaleLabelNode = label }
             
             let mat = SCNMaterial()
             mat.diffuse.contents = skScene
@@ -355,7 +361,7 @@ class VRSceneManager: ObservableObject {
 
         if let target = gazeTargetName, let start = gazeStart {
             let elapsed = Date().timeIntervalSince(start)
-            let threshold: TimeInterval = isPlacingTV ? 4.0 : 2.0
+            let threshold: TimeInterval = 2.5
             
             DispatchQueue.main.async { self.gazeProgress = CGFloat(min(1.0, elapsed / threshold)) }
             
@@ -393,6 +399,15 @@ class VRSceneManager: ObservableObject {
         case "btn_Mute":
             player.isMuted.toggle()
             muteLabelNode?.text = player.isMuted ? "Unmute" : "Mute"
+        case "btn_-", "btn_+", "btn_1.0x":
+            if currentMode != .spherical {
+                if action == "btn_-" && screenScale > 0.5 { screenScale -= 0.1 }
+                else if action == "btn_+" && screenScale < 3.0 { screenScale += 0.1 }
+                else if action == "btn_1.0x" { screenScale = 1.0 }
+                
+                scaleLabelNode?.text = String(format: "%.1fx", screenScale)
+                mainScreenNode?.scale = SCNVector3(screenScale, screenScale, screenScale)
+            }
         case "btn_Move":
             if currentMode != .spherical {
                 isPlacingTV = true
