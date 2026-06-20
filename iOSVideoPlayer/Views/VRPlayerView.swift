@@ -279,48 +279,54 @@ class VRSceneManager: ObservableObject {
     // MARK: Control Panel
     private func buildControlPanel() {
         let panel = SCNNode()
-        let actions = ["Pause", "Resume", "Mute", "-", "1.0x", "+", "Move", "Reset"]
-        let btnWidth: Float = 0.6
+        let row1 = ["Pause", "Resume", "Mute", "-", "1.0x", "+", "Move", "Reset"]
+        let row2 = ["SBS", "360", "Cinema", "Void"]
         let spacing: Float = 0.15
         
-        for (i, action) in actions.enumerated() {
-            let btnGeo = SCNPlane(width: CGFloat(btnWidth), height: 0.25)
-            btnGeo.cornerRadius = 0.05
-            
-            let skScene = SKScene(size: CGSize(width: 150, height: 60))
-            skScene.backgroundColor = UIColor(white: 0.2, alpha: 0.9)
-            
-            let labelText: String
-            if action == "Mute" { labelText = player.isMuted ? "Unmute" : "Mute" }
-            else if action == "1.0x" { labelText = String(format: "%.1fx", screenScale) }
-            else { labelText = action }
-            
-            let label = SKLabelNode(text: labelText)
-            label.fontName = "HelveticaNeue-Bold"
-            label.fontSize = 24
-            label.fontColor = .white
-            label.verticalAlignmentMode = .center
-            label.horizontalAlignmentMode = .center
-            label.position = CGPoint(x: 75, y: 30)
-            label.xScale = -1 // Fix reversed text
-            skScene.addChild(label)
-            
-            if action == "Mute" { self.muteLabelNode = label }
-            if action == "1.0x" { self.scaleLabelNode = label }
-            
-            let mat = SCNMaterial()
-            mat.diffuse.contents = skScene
-            mat.isDoubleSided = true
-            btnGeo.firstMaterial = mat
-            
-            let btn = SCNNode(geometry: btnGeo)
-            btn.name = "btn_\(action)"
-            
-            let totalWidth = Float(actions.count) * btnWidth + Float(actions.count - 1) * spacing
-            let xPos = Float(i) * (btnWidth + spacing) - totalWidth / 2.0 + btnWidth / 2.0
-            btn.position = SCNVector3(xPos, 0, 0)
-            panel.addChildNode(btn)
+        func createRow(actions: [String], yOffset: Float, btnWidth: Float) {
+            for (i, action) in actions.enumerated() {
+                let btnGeo = SCNPlane(width: CGFloat(btnWidth), height: 0.25)
+                btnGeo.cornerRadius = 0.05
+                
+                let sceneWidth = CGFloat(btnWidth * 250)
+                let skScene = SKScene(size: CGSize(width: sceneWidth, height: 60))
+                skScene.backgroundColor = UIColor(white: 0.2, alpha: 0.9)
+                
+                let labelText: String
+                if action == "Mute" { labelText = player.isMuted ? "Unmute" : "Mute" }
+                else if action == "1.0x" { labelText = String(format: "%.1fx", screenScale) }
+                else { labelText = action }
+                
+                let label = SKLabelNode(text: labelText)
+                label.fontName = "HelveticaNeue-Bold"
+                label.fontSize = 24
+                label.fontColor = .white
+                label.verticalAlignmentMode = .center
+                label.horizontalAlignmentMode = .center
+                label.position = CGPoint(x: sceneWidth / 2, y: 30)
+                label.yScale = -1 // Fix upside down text
+                skScene.addChild(label)
+                
+                if action == "Mute" { self.muteLabelNode = label }
+                if action == "1.0x" { self.scaleLabelNode = label }
+                
+                let mat = SCNMaterial()
+                mat.diffuse.contents = skScene
+                mat.isDoubleSided = true
+                btnGeo.firstMaterial = mat
+                
+                let btn = SCNNode(geometry: btnGeo)
+                btn.name = "btn_\(action)"
+                
+                let totalWidth = Float(actions.count) * btnWidth + Float(actions.count - 1) * spacing
+                let xPos = Float(i) * (btnWidth + spacing) - totalWidth / 2.0 + btnWidth / 2.0
+                btn.position = SCNVector3(xPos, yOffset, 0)
+                panel.addChildNode(btn)
+            }
         }
+        
+        createRow(actions: row1, yOffset: 0, btnWidth: 0.6)
+        createRow(actions: row2, yOffset: -0.35, btnWidth: 0.8)
         
         controlPanelNode = panel
         if let ms = mainScreenNode {
@@ -414,6 +420,14 @@ class VRSceneManager: ObservableObject {
             }
         case "btn_Reset":
             referenceAttitude = nil
+        case "btn_SBS":
+            applyMode(.sideBySide)
+        case "btn_360":
+            applyMode(.spherical)
+        case "btn_Cinema":
+            applyMode(.cinema)
+        case "btn_Void":
+            applyMode(.void)
         default:
             break
         }
@@ -560,6 +574,7 @@ struct VRPlayerView: View {
         .onAppear {
             mgr.player.play()
             mgr.skVideoNode?.play()
+            UIApplication.shared.isIdleTimerDisabled = true
             
             // Force Landscape Orientation
             if #available(iOS 16.0, *) {
@@ -574,6 +589,8 @@ struct VRPlayerView: View {
             }
         }
         .onDisappear {
+            UIApplication.shared.isIdleTimerDisabled = false
+            
             // Restore Portrait Orientation
             if #available(iOS 16.0, *) {
                 guard let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene else { return }
