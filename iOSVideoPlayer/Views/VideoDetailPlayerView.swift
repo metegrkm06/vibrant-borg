@@ -61,6 +61,7 @@ struct VideoDetailPlayerView: View {
     @State private var isMuted = false
     @State private var playbackSpeed: Float = 1.0
     @State private var isAspectFill = false
+    @State private var showVRMode = false
     
     private let timer = Timer.publish(every: 0.5, on: .main, in: .common).autoconnect()
     
@@ -106,6 +107,20 @@ struct VideoDetailPlayerView: View {
                             .padding(.leading, 8)
                         
                         Spacer()
+                        
+                        // VR Mode Button
+                        Button(action: {
+                            player.pause()
+                            isPlaying = false
+                            showVRMode = true
+                        }) {
+                            Text("VR")
+                                .font(.system(size: 13, weight: .heavy))
+                                .foregroundColor(.white)
+                                .frame(width: 40, height: 40)
+                                .background(Color.purple.opacity(0.8))
+                                .clipShape(Circle())
+                        }
                         
                         // Feature 1: Aspect Ratio/Crop Toggle (Aspect Fit vs Aspect Fill)
                         Button(action: toggleAspectRatio) {
@@ -212,6 +227,13 @@ struct VideoDetailPlayerView: View {
                     ))
                 }
             }
+        }
+        .fullScreenCover(isPresented: $showVRMode, onDismiss: {
+            player.play()
+            isPlaying = true
+            player.rate = playbackSpeed
+        }) {
+            VRPlayerView(url: url, title: title)
         }
         .statusBar(hidden: !showControls)
         .onAppear {
