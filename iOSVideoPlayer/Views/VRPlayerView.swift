@@ -327,7 +327,7 @@ class VRSceneManager: ObservableObject {
             // Place exactly where looking, 5 units away
             hitPoint = SCNVector3(p1.x + fwd.x * 5, p1.y + fwd.y * 5, p1.z + fwd.z * 5)
         } else {
-            let hits = scene.rootNode.hitTestWithSegment(from: p1, to: p2, options: [.firstFoundOnly: true])
+            let hits = scene.rootNode.hitTestWithSegment(from: p1, to: p2, options: nil)
             if let hit = hits.first, let name = hit.node.name, name.starts(with: "btn_") {
                 currentTarget = name
                 hitPoint = hit.worldCoordinates
