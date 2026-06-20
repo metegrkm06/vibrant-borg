@@ -49,11 +49,8 @@ class VRSceneManager: ObservableObject {
     let scene = SCNScene()
     let leftCam = SCNNode()
     let rightCam = SCNNode()
-
-    // Core nodes
-    let headNode = SCNNode()
-    let cameraBaseNode = SCNNode() // To orient the camera base
-    let recenterNode = SCNNode() // To apply reset offsets
+    let cameraBaseNode = SCNNode()
+    let worldNode = SCNNode()
     
     let player: AVPlayer
     private let motionMgr = CMMotionManager()
@@ -68,7 +65,6 @@ class VRSceneManager: ObservableObject {
     private var scaleLabelNode: SKLabelNode?
     @Published var screenScale: Float = 1.0
     
-    private var referenceAttitude: CMAttitude?
     private var gazeTargetName: String?
     private var gazeStart: Date?
 
@@ -77,23 +73,22 @@ class VRSceneManager: ObservableObject {
 
         scene.background.contents = UIColor.black
         
-        scene.rootNode.addChildNode(recenterNode)
-        recenterNode.addChildNode(cameraBaseNode)
-        cameraBaseNode.addChildNode(headNode)
+        scene.rootNode.addChildNode(worldNode)
+        scene.rootNode.addChildNode(cameraBaseNode)
+        cameraBaseNode.addChildNode(leftCam)
+        cameraBaseNode.addChildNode(rightCam)
 
         let lc = SCNCamera()
         lc.fieldOfView = 90
         lc.zNear = 0.1
         leftCam.camera = lc
         leftCam.position = SCNVector3(-ipd / 2, 0, 0)
-        headNode.addChildNode(leftCam)
 
         let rc = SCNCamera()
         rc.fieldOfView = 90
         rc.zNear = 0.1
         rightCam.camera = rc
         rightCam.position = SCNVector3(ipd / 2, 0, 0)
-        headNode.addChildNode(rightCam)
 
         let chGeo = SCNSphere(radius: 0.012)
         let chMat = SCNMaterial()
@@ -102,7 +97,7 @@ class VRSceneManager: ObservableObject {
         chGeo.firstMaterial = chMat
         crosshairNode = SCNNode(geometry: chGeo)
         crosshairNode?.position = SCNVector3(0, 0, -2.5)
-        headNode.addChildNode(crosshairNode!)
+        cameraBaseNode.addChildNode(crosshairNode!)
 
         setupVideoMaterial()
         applyMode(.sideBySide)
@@ -142,18 +137,15 @@ class VRSceneManager: ObservableObject {
 
     func applyMode(_ mode: VRMode) {
         currentMode = mode
-        isPlacingTV = false
-        mainScreenNode?.removeFromParentNode()
-        controlPanelNode?.removeFromParentNode()
+        worldNode.childNodes.forEach { $0.removeFromParentNode() }
+        mainScreenNode = nil
+        controlPanelNode = nil
         gazeTargetName = nil
+        gazeStart = nil
+        gazeProgress = 0
+        isPlacingTV = false
+        worldNode.eulerAngles = SCNVector3(0, 0, 0)
         
-        // Clear environment
-        scene.rootNode.childNodes.forEach {
-            if $0 != recenterNode && $0 != mainScreenNode && $0 != controlPanelNode {
-                $0.removeFromParentNode()
-            }
-        }
-
         switch mode {
         case .sideBySide: buildSBS()
         case .spherical: buildSpherical()
@@ -179,7 +171,7 @@ class VRSceneManager: ObservableObject {
         plane.firstMaterial = vidMaterial
         mainScreenNode = SCNNode(geometry: plane)
         mainScreenNode?.position = SCNVector3(0, 0, -3)
-        scene.rootNode.addChildNode(mainScreenNode!)
+        worldNode.addChildNode(mainScreenNode!)
     }
 
     // MARK: Mode 2 — 360° / 180° Spherical
@@ -189,14 +181,19 @@ class VRSceneManager: ObservableObject {
         
         let sphere = SCNSphere(radius: 50)
         sphere.segmentCount = 96
-        sphere.firstMaterial = vidMaterial
+        let mat = SCNMaterial()
+        mat.diffuse.contents = vidMaterial?.diffuse.contents
+        mat.isDoubleSided = true
+        mat.cullMode = .front
+        sphere.firstMaterial = mat
         let sphereNode = SCNNode(geometry: sphere)
-        scene.rootNode.addChildNode(sphereNode)
+        worldNode.addChildNode(sphereNode)
         
-        // Dummy screen node for control panel in 360 mode
-        mainScreenNode = SCNNode()
-        mainScreenNode?.position = SCNVector3(0, 0, -4)
-        scene.rootNode.addChildNode(mainScreenNode!)
+        let dummy = SCNPlane(width: 0.1, height: 0.1)
+        dummy.firstMaterial?.diffuse.contents = UIColor.clear
+        mainScreenNode = SCNNode(geometry: dummy)
+        mainScreenNode?.position = SCNVector3(0, 0, -3)
+        worldNode.addChildNode(mainScreenNode!)
     }
 
     // MARK: Mode 3 — Cinema
@@ -244,7 +241,7 @@ class VRSceneManager: ObservableObject {
         dlN.position = SCNVector3(0, 3, 0)
         room.addChildNode(dlN)
 
-        scene.rootNode.addChildNode(room)
+        worldNode.addChildNode(room)
     }
 
     // MARK: Mode 4 — Void Theater
@@ -258,7 +255,7 @@ class VRSceneManager: ObservableObject {
         screen.firstMaterial = vidMaterial
         mainScreenNode = SCNNode(geometry: screen)
         mainScreenNode?.position = SCNVector3(0, 0, -8)
-        scene.rootNode.addChildNode(mainScreenNode!)
+        worldNode.addChildNode(mainScreenNode!)
 
         let stars = SCNParticleSystem()
         stars.particleColor = .white
@@ -273,7 +270,7 @@ class VRSceneManager: ObservableObject {
         stars.blendMode = .additive
         let starsN = SCNNode()
         starsN.addParticleSystem(stars)
-        scene.rootNode.addChildNode(starsN)
+        worldNode.addChildNode(starsN)
     }
     
     // MARK: Control Panel
@@ -339,8 +336,8 @@ class VRSceneManager: ObservableObject {
     // MARK: Gaze Interaction
 
     @objc private func tickGaze() {
-        let p1 = leftCam.worldPosition
-        let fwd = headNode.convertVector(SCNVector3(0, 0, -1), to: nil)
+        let p1 = cameraBaseNode.presentation.worldPosition
+        let fwd = cameraBaseNode.presentation.worldFront
         let p2 = SCNVector3(p1.x + fwd.x * 50, p1.y + fwd.y * 50, p1.z + fwd.z * 50)
 
         var hitPoint = SCNVector3(0,0,0)
@@ -348,7 +345,6 @@ class VRSceneManager: ObservableObject {
 
         if isPlacingTV {
             currentTarget = "moving_target"
-            // Place exactly where looking, 5 units away
             hitPoint = SCNVector3(p1.x + fwd.x * 5, p1.y + fwd.y * 5, p1.z + fwd.z * 5)
         } else {
             let hits = scene.rootNode.hitTestWithSegment(from: p1, to: p2, options: nil)
@@ -372,7 +368,22 @@ class VRSceneManager: ObservableObject {
             DispatchQueue.main.async { self.gazeProgress = CGFloat(min(1.0, elapsed / threshold)) }
             
             if elapsed >= threshold {
-                executeGazeAction(action: target, point: hitPoint)
+                if isPlacingTV {
+                    let front = cameraBaseNode.presentation.worldFront
+                    let pitch = asin(front.y)
+                    let yaw = atan2(-front.x, -front.z)
+                    
+                    SCNTransaction.begin()
+                    SCNTransaction.animationDuration = 0.5
+                    worldNode.eulerAngles = SCNVector3(pitch, yaw, 0)
+                    SCNTransaction.commit()
+                    
+                    isPlacingTV = false
+                    gazeStart = nil
+                    gazeProgress = 0
+                } else {
+                    executeGazeAction(action: target, point: hitPoint)
+                }
                 gazeTargetName = nil
                 gazeStart = nil
                 crosshairNode?.geometry?.firstMaterial?.diffuse.contents = UIColor.white.withAlphaComponent(0.5)
@@ -386,18 +397,6 @@ class VRSceneManager: ObservableObject {
     
     private func executeGazeAction(action: String, point: SCNVector3) {
         switch action {
-        case "moving_target":
-            isPlacingTV = false
-            mainScreenNode?.position = point
-            // face the user
-            let hPos = headNode.worldPosition
-            let dx = hPos.x - point.x
-            let dz = hPos.z - point.z
-            let dy = hPos.y - point.y
-            let yaw = atan2(dx, dz)
-            let distXZ = sqrt(dx*dx + dz*dz)
-            let pitch = atan2(dy, distXZ)
-            mainScreenNode?.eulerAngles = SCNVector3(-pitch, yaw, 0)
         case "btn_Pause":
             player.pause()
         case "btn_Resume":
@@ -419,7 +418,10 @@ class VRSceneManager: ObservableObject {
                 isPlacingTV = true
             }
         case "btn_Reset":
-            referenceAttitude = nil
+            SCNTransaction.begin()
+            SCNTransaction.animationDuration = 0.5
+            worldNode.eulerAngles = SCNVector3(0, 0, 0)
+            SCNTransaction.commit()
         case "btn_SBS":
             applyMode(.sideBySide)
         case "btn_360":
@@ -441,19 +443,13 @@ class VRSceneManager: ObservableObject {
         motionMgr.startDeviceMotionUpdates(to: .main) { [weak self] motion, _ in
             guard let self = self, let m = motion else { return }
             
-            // We use attitude copying to prevent mutating the shared reference
-            if self.referenceAttitude == nil {
-                self.referenceAttitude = m.attitude.copy() as? CMAttitude
-            }
+            let q = m.attitude.quaternion
+            let qx = Float(q.x)
+            let qy = Float(q.y)
+            let qz = Float(q.z)
+            let qw = Float(q.w)
             
-            if let ref = self.referenceAttitude, let current = m.attitude.copy() as? CMAttitude {
-                current.multiply(byInverseOf: ref)
-                let q = current.quaternion
-                
-                // For Landscape Right orientation, we map Device axes to SceneKit Camera axes:
-                // Device pitch/yaw/roll mapped to SCNQuaternion
-                self.headNode.orientation = SCNQuaternion(Float(-q.y), Float(q.x), Float(q.z), Float(q.w))
-            }
+            self.cameraBaseNode.orientation = SCNQuaternion(x: qy, y: -qx, z: qz, w: qw)
         }
     }
 
