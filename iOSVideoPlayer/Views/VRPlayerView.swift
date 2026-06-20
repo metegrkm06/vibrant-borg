@@ -3,6 +3,7 @@ import SceneKit
 import SpriteKit
 import CoreMotion
 import AVFoundation
+import UIKit
 
 // MARK: - VR Viewing Mode
 
@@ -155,7 +156,7 @@ class VRSceneManager: ObservableObject {
     // MARK: Mode 1 — Side-by-Side
 
     private func buildSBS() {
-        headNode.position = SCNVector3Zero
+        headNode.position = SCNVector3(0, 0, 0)
 
         let plane = SCNPlane(width: 4, height: 2.25)
         plane.firstMaterial = vidMaterial
@@ -167,7 +168,7 @@ class VRSceneManager: ObservableObject {
     // MARK: Mode 2 — 360° / 180° Spherical
 
     private func buildSpherical() {
-        headNode.position = SCNVector3Zero
+        headNode.position = SCNVector3(0, 0, 0)
 
         let sphere = SCNSphere(radius: 50)
         sphere.segmentCount = 96
@@ -414,7 +415,7 @@ class VRSceneManager: ObservableObject {
             if let btn = btnNode {
                 let tvH = Float((tvNode?.geometry as? SCNPlane)?.height ?? 1.6875)
                 btn.position = SCNVector3(newPos.x, newPos.y - tvH / 2 - 0.2, newPos.z)
-                btn.eulerAngles = tvNode?.eulerAngles ?? SCNVector3Zero
+                btn.eulerAngles = tvNode?.eulerAngles ?? SCNVector3(0, 0, 0)
                 // Push button slightly toward viewer
                 btn.position.x += fN.x * (-0.03)
                 btn.position.z += fN.z * (-0.03)
@@ -436,7 +437,7 @@ class VRSceneManager: ObservableObject {
     // MARK: Mode 4 — Void Theater
 
     private func buildVoid() {
-        headNode.position = SCNVector3Zero
+        headNode.position = SCNVector3(0, 0, 0)
 
         // Giant IMAX-style screen
         let screenW: CGFloat = 14
