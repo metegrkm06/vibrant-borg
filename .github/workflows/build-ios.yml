@@ -36,16 +36,12 @@ jobs:
             AD_HOC_CODE_SIGNING_ALLOWED=YES \
             ONLY_ACTIVE_ARCH=NO | tee build.log
             
-      - name: Push build log to repo
+      - name: Upload build log
         if: failure()
-        run: |
-          git config user.name "GitHub Actions"
-          git config user.email "actions@github.com"
-          git checkout -b build-errors
-          cp build.log build.log.txt
-          git add build.log.txt
-          git commit -m "Add build log"
-          git push -f origin build-errors
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: build.log
 
       - name: Package IPA
         run: |
