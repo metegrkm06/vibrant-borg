@@ -64,6 +64,7 @@ class VRSceneManager: ObservableObject {
     private var mainScreenNode: SCNNode?
     private var controlPanelNode: SCNNode?
     private var crosshairNode: SCNNode?
+    private var muteLabelNode: SKLabelNode?
     
     private var referenceAttitude: CMAttitude?
     private var gazeTargetName: String?
@@ -199,43 +200,46 @@ class VRSceneManager: ObservableObject {
     // MARK: Mode 3 — Cinema
 
     private func buildCinema() {
-        scene.background.contents = UIColor(red: 0.08, green: 0.06, blue: 0.12, alpha: 1)
+        scene.background.contents = UIColor(red: 0.05, green: 0.05, blue: 0.08, alpha: 1)
 
         let room = SCNNode()
 
-        let floorGeo = SCNPlane(width: 10, height: 10)
-        floorGeo.firstMaterial?.diffuse.contents = UIColor(red: 0.15, green: 0.1, blue: 0.15, alpha: 1)
-        let floorNode = SCNNode(geometry: floorGeo)
-        floorNode.eulerAngles.x = -Float.pi / 2
-        floorNode.position.y = -1.5
-        room.addChildNode(floorNode)
+        // Create a literal room box
+        let roomGeo = SCNBox(width: 12, height: 8, length: 14, chamferRadius: 0)
+        let roomMat = SCNMaterial()
+        roomMat.diffuse.contents = UIColor(red: 0.12, green: 0.1, blue: 0.15, alpha: 1)
+        roomMat.isDoubleSided = true
+        roomGeo.firstMaterial = roomMat
+        let roomBoxNode = SCNNode(geometry: roomGeo)
+        roomBoxNode.position = SCNVector3(0, 1, 0)
+        room.addChildNode(roomBoxNode)
 
-        let bedGeo = SCNBox(width: 2, height: 0.4, length: 2.2, chamferRadius: 0.05)
-        bedGeo.firstMaterial?.diffuse.contents = UIColor.darkGray
+        let bedGeo = SCNBox(width: 3.0, height: 0.6, length: 4.0, chamferRadius: 0.1)
+        bedGeo.firstMaterial?.diffuse.contents = UIColor(white: 0.2, alpha: 1)
         let bed = SCNNode(geometry: bedGeo)
-        bed.position = SCNVector3(0, -1.3, 0)
+        bed.position = SCNVector3(0, -1.5, 0)
         room.addChildNode(bed)
 
-        let tvW: CGFloat = 3.0
+        let tvW: CGFloat = 4.5
         let tvGeo = SCNPlane(width: tvW, height: tvW * (9/16))
         tvGeo.firstMaterial = vidMaterial
         mainScreenNode = SCNNode(geometry: tvGeo)
-        mainScreenNode?.position = SCNVector3(0, 0.5, -3.5)
+        mainScreenNode?.position = SCNVector3(0, 0.5, -6.5)
         room.addChildNode(mainScreenNode!)
 
         let light = SCNLight()
         light.type = .ambient
-        light.intensity = 200
+        light.intensity = 300
         let lNode = SCNNode()
         lNode.light = light
         room.addChildNode(lNode)
 
         let dl = SCNLight()
-        dl.type = .directional
-        dl.intensity = 500
+        dl.type = .omni
+        dl.intensity = 800
         let dlN = SCNNode()
         dlN.light = dl
-        dlN.eulerAngles = SCNVector3(-Float.pi / 4, Float.pi / 4, 0)
+        dlN.position = SCNVector3(0, 3, 0)
         room.addChildNode(dlN)
 
         scene.rootNode.addChildNode(room)
@@ -273,30 +277,41 @@ class VRSceneManager: ObservableObject {
     // MARK: Control Panel
     private func buildControlPanel() {
         let panel = SCNNode()
-        let actions = ["Pause", "Resume", "Move", "Reset"]
+        let actions = ["Pause", "Resume", "Mute", "Move", "Reset"]
         let btnWidth: Float = 0.8
         let spacing: Float = 0.2
         
         for (i, action) in actions.enumerated() {
             let btnGeo = SCNPlane(width: CGFloat(btnWidth), height: 0.3)
             btnGeo.cornerRadius = 0.05
-            btnGeo.firstMaterial?.diffuse.contents = UIColor.purple.withAlphaComponent(0.8)
+            
+            let skScene = SKScene(size: CGSize(width: 200, height: 80))
+            skScene.backgroundColor = UIColor(white: 0.2, alpha: 0.9)
+            
+            let labelText = (action == "Mute") ? (player.isMuted ? "Unmute" : "Mute") : action
+            let label = SKLabelNode(text: labelText)
+            label.fontName = "HelveticaNeue-Bold"
+            label.fontSize = 32
+            label.fontColor = .white
+            label.verticalAlignmentMode = .center
+            label.horizontalAlignmentMode = .center
+            label.position = CGPoint(x: 100, y: 40)
+            skScene.addChild(label)
+            
+            if action == "Mute" {
+                self.muteLabelNode = label
+            }
+            
+            let mat = SCNMaterial()
+            mat.diffuse.contents = skScene
+            mat.isDoubleSided = true
+            btnGeo.firstMaterial = mat
+            
             let btn = SCNNode(geometry: btnGeo)
             btn.name = "btn_\(action)"
             
-            let textGeo = SCNText(string: action, extrusionDepth: 0.0)
-            textGeo.font = UIFont.boldSystemFont(ofSize: 0.15)
-            textGeo.firstMaterial?.diffuse.contents = UIColor.white
-            textGeo.alignmentMode = CATextLayerAlignmentMode.center.rawValue
-            
-            let textNode = SCNNode(geometry: textGeo)
-            let (min, max) = textNode.boundingBox
-            let tw = Float(max.x - min.x)
-            let th = Float(max.y - min.y)
-            textNode.position = SCNVector3(-tw/2, -th/2, 0.01)
-            btn.addChildNode(textNode)
-            
-            let xPos = Float(i) * (btnWidth + spacing) - Float(actions.count - 1) * (btnWidth + spacing) / 2.0
+            let totalWidth = Float(actions.count) * btnWidth + Float(actions.count - 1) * spacing
+            let xPos = Float(i) * (btnWidth + spacing) - totalWidth / 2.0 + btnWidth / 2.0
             btn.position = SCNVector3(xPos, 0, 0)
             panel.addChildNode(btn)
         }
@@ -375,6 +390,9 @@ class VRSceneManager: ObservableObject {
             player.pause()
         case "btn_Resume":
             player.play()
+        case "btn_Mute":
+            player.isMuted.toggle()
+            muteLabelNode?.text = player.isMuted ? "Unmute" : "Mute"
         case "btn_Move":
             if currentMode != .spherical {
                 isPlacingTV = true
@@ -533,6 +551,8 @@ struct VRPlayerView: View {
                 guard let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene else { return }
                 windowScene.requestGeometryUpdate(.iOS(interfaceOrientations: .landscapeRight))
             }
+            UIDevice.current.setValue(UIInterfaceOrientation.landscapeRight.rawValue, forKey: "orientation")
+            UIViewController.attemptRotationToDeviceOrientation()
             
             DispatchQueue.main.asyncAfter(deadline: .now() + 4) {
                 withAnimation { showUI = false }
@@ -544,6 +564,8 @@ struct VRPlayerView: View {
                 guard let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene else { return }
                 windowScene.requestGeometryUpdate(.iOS(interfaceOrientations: .portrait))
             }
+            UIDevice.current.setValue(UIInterfaceOrientation.portrait.rawValue, forKey: "orientation")
+            UIViewController.attemptRotationToDeviceOrientation()
             
             mgr.stopMotion()
             mgr.player.pause()
