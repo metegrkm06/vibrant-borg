@@ -104,21 +104,6 @@ struct VideoDetailPlayerView: View {
             CustomPlayerView(player: player, videoGravity: isAspectFill ? .resizeAspectFill : .resizeAspect)
                 .rotationEffect(.degrees(isLandscapeForced ? 90 : 0))
                 .animation(.easeInOut, value: isLandscapeForced)
-                .gesture(
-                    DragGesture(minimumDistance: 30, coordinateSpace: .local)
-                        .onEnded { value in
-                            let horizontalSwipe = value.translation.width
-                            let verticalSwipe = value.translation.height
-                            
-                            if abs(horizontalSwipe) > abs(verticalSwipe) {
-                                if horizontalSwipe < -50 {
-                                    playNextVideo()
-                                } else if horizontalSwipe > 50 {
-                                    playPreviousVideo()
-                                }
-                            }
-                        }
-                )
             
             // Double Tap Overlay
             HStack(spacing: 0) {
@@ -160,6 +145,21 @@ struct VideoDetailPlayerView: View {
                             .scaleEffect(showSkipForwardAnimation ? 1.2 : 0.8)
                     )
             }
+            .gesture(
+                DragGesture(minimumDistance: 30, coordinateSpace: .local)
+                    .onEnded { value in
+                        let horizontalSwipe = value.translation.width
+                        let verticalSwipe = value.translation.height
+                        
+                        if abs(horizontalSwipe) > abs(verticalSwipe) {
+                            if horizontalSwipe < -50 {
+                                playNextVideo()
+                            } else if horizontalSwipe > 50 {
+                                playPreviousVideo()
+                            }
+                        }
+                    }
+            )
             // Custom Playback controls overlay
             if showControls {
                 VStack {
@@ -210,6 +210,38 @@ struct VideoDetailPlayerView: View {
                             }
                         } label: {
                             Image(systemName: "list.bullet.rectangle.portrait")
+                                .font(.title3)
+                                .foregroundColor(.white)
+                                .padding(12)
+                                .background(Color.black.opacity(0.6))
+                                .clipShape(Circle())
+                        }
+                        
+                        // Add to Playlist Menu
+                        Menu {
+                            if viewModel.playlists.isEmpty {
+                                Text("No Playlists")
+                            } else {
+                                ForEach(viewModel.playlists) { playlist in
+                                    Button(action: {
+                                        if let video = currentVideo {
+                                            if playlist.videoFilenames.contains(video.url.lastPathComponent) {
+                                                viewModel.removeVideo(video, from: playlist)
+                                            } else {
+                                                viewModel.addVideo(video, to: playlist)
+                                            }
+                                        }
+                                    }) {
+                                        if let video = currentVideo, playlist.videoFilenames.contains(video.url.lastPathComponent) {
+                                            Label(playlist.name, systemImage: "checkmark")
+                                        } else {
+                                            Text(playlist.name)
+                                        }
+                                    }
+                                }
+                            }
+                        } label: {
+                            Image(systemName: "text.badge.plus")
                                 .font(.title3)
                                 .foregroundColor(.white)
                                 .padding(12)
