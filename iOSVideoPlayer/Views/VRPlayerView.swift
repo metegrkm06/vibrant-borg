@@ -68,6 +68,7 @@ class VRSceneManager: ObservableObject {
     private var referenceAttitude: CMAttitude?
     private var gazeTargetName: String?
     private var gazeStart: Date?
+    private var lastTimeHitTarget: Date?
 
     init(url: URL) {
         self.player = AVPlayer(url: url)
@@ -143,6 +144,7 @@ class VRSceneManager: ObservableObject {
         controlPanelNode = nil
         gazeTargetName = nil
         gazeStart = nil
+        lastTimeHitTarget = nil
         gazeProgress = 0
         isPlacingTV = false
         worldNode.eulerAngles = SCNVector3(0, 0, 0)
@@ -355,15 +357,38 @@ class VRSceneManager: ObservableObject {
             }
         }
 
-        if currentTarget != gazeTargetName {
-            gazeTargetName = currentTarget
-            gazeStart = Date()
-            crosshairNode?.geometry?.firstMaterial?.diffuse.contents = UIColor.white.withAlphaComponent(0.5)
-            DispatchQueue.main.async { self.gazeProgress = 0 }
+        let now = Date()
+
+        if let target = currentTarget {
+            if target == gazeTargetName {
+                lastTimeHitTarget = now
+            } else {
+                gazeTargetName = target
+                gazeStart = now
+                lastTimeHitTarget = now
+                crosshairNode?.geometry?.firstMaterial?.diffuse.contents = UIColor.white.withAlphaComponent(0.5)
+                DispatchQueue.main.async { self.gazeProgress = 0 }
+            }
+        } else {
+            if let lastHit = lastTimeHitTarget {
+                let elapsedSinceLastHit = now.timeIntervalSince(lastHit)
+                if elapsedSinceLastHit > 0.4 {
+                    gazeTargetName = nil
+                    gazeStart = nil
+                    lastTimeHitTarget = nil
+                    crosshairNode?.geometry?.firstMaterial?.diffuse.contents = UIColor.white.withAlphaComponent(0.5)
+                    DispatchQueue.main.async { self.gazeProgress = 0 }
+                }
+            } else {
+                gazeTargetName = nil
+                gazeStart = nil
+                crosshairNode?.geometry?.firstMaterial?.diffuse.contents = UIColor.white.withAlphaComponent(0.5)
+                DispatchQueue.main.async { self.gazeProgress = 0 }
+            }
         }
 
         if let target = gazeTargetName, let start = gazeStart {
-            let elapsed = Date().timeIntervalSince(start)
+            let elapsed = now.timeIntervalSince(start)
             let threshold: TimeInterval = 2.5
             
             DispatchQueue.main.async { self.gazeProgress = CGFloat(min(1.0, elapsed / threshold)) }
@@ -381,12 +406,14 @@ class VRSceneManager: ObservableObject {
                     
                     isPlacingTV = false
                     gazeStart = nil
+                    lastTimeHitTarget = nil
                     gazeProgress = 0
                 } else {
                     executeGazeAction(action: target, point: hitPoint)
                 }
                 gazeTargetName = nil
                 gazeStart = nil
+                lastTimeHitTarget = nil
                 crosshairNode?.geometry?.firstMaterial?.diffuse.contents = UIColor.white.withAlphaComponent(0.5)
                 DispatchQueue.main.async { self.gazeProgress = 0 }
             } else {
