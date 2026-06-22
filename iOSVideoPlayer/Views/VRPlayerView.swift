@@ -349,8 +349,8 @@ class VRSceneManager: ObservableObject {
             hitPoint = SCNVector3(p1.x + fwd.x * 5, p1.y + fwd.y * 5, p1.z + fwd.z * 5)
         } else {
             let hits = scene.rootNode.hitTestWithSegment(from: p1, to: p2, options: nil)
-            if let hit = hits.first, let name = hit.node.name, name.starts(with: "btn_") {
-                currentTarget = name
+            if let hit = hits.first(where: { $0.node.name?.starts(with: "btn_") == true }) {
+                currentTarget = hit.node.name
                 hitPoint = hit.worldCoordinates
             }
         }
@@ -682,14 +682,14 @@ struct VRPlayerView: View {
                     Text(mgr.isPlacingTV ? "Look at new spot..." : "Triggering Action...")
                         .font(.system(size: 11, weight: .medium))
                         .foregroundColor(.white)
-                    GeometryReader { geo in
+                    ZStack(alignment: .leading) {
+                        RoundedRectangle(cornerRadius: 4)
+                            .fill(Color.white.opacity(0.15))
+                            .frame(width: 120, height: 6)
                         RoundedRectangle(cornerRadius: 4)
                             .fill(mgr.isPlacingTV ? Color.green.opacity(0.6) : Color.cyan.opacity(0.6))
-                            .frame(width: geo.size.width * mgr.gazeProgress)
+                            .frame(width: 120 * mgr.gazeProgress, height: 6)
                     }
-                    .frame(height: 6)
-                    .background(Color.white.opacity(0.15))
-                    .cornerRadius(4)
                 }
                 .padding(.horizontal, 20)
                 .padding(.vertical, 8)
@@ -716,7 +716,7 @@ struct VRPlayerView: View {
     private var placingHint: some View {
         VStack {
             Spacer()
-            Text("📍 Look where you want the screen, hold for 4s")
+            Text("📍 Look where you want the screen, hold for 2.5s")
                 .font(.system(size: 12, weight: .bold))
                 .foregroundColor(.green)
                 .padding(.horizontal, 16)
