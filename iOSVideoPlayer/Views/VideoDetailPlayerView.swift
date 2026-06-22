@@ -46,8 +46,8 @@ class PlayerUIView: UIView {
 }
 
 struct VideoDetailPlayerView: View {
-    let url: URL
-    let title: String
+    let videos: [Video]
+    @State private var currentIndex: Int
     @Environment(\.presentationMode) var presentationMode
     
     @State private var player: AVPlayer
@@ -65,10 +65,24 @@ struct VideoDetailPlayerView: View {
     
     private let timer = Timer.publish(every: 0.5, on: .main, in: .common).autoconnect()
     
-    init(url: URL, title: String) {
-        self.url = url
-        self.title = title
-        self._player = State(initialValue: AVPlayer(url: url))
+    private var currentVideo: Video? {
+        guard currentIndex >= 0 && currentIndex < videos.count else { return nil }
+        return videos[currentIndex]
+    }
+    
+    private var url: URL {
+        return currentVideo?.url ?? URL(fileURLWithPath: "")
+    }
+    
+    private var title: String {
+        return currentVideo?.title ?? "Video Player"
+    }
+    
+    init(videos: [Video], startIndex: Int) {
+        self.videos = videos
+        self._currentIndex = State(initialValue: startIndex)
+        let initialVideo = videos[startIndex]
+        self._player = State(initialValue: AVPlayer(url: initialVideo.url))
     }
     
     var body: some View {
@@ -82,6 +96,21 @@ struct VideoDetailPlayerView: View {
                         showControls.toggle()
                     }
                 }
+                .gesture(
+                    DragGesture(minimumDistance: 30, coordinateSpace: .local)
+                        .onEnded { value in
+                            let horizontalSwipe = value.translation.width
+                            let verticalSwipe = value.translation.height
+                            
+                            if abs(horizontalSwipe) > abs(verticalSwipe) {
+                                if horizontalSwipe < -50 {
+                                    playNextVideo()
+                                } else if horizontalSwipe > 50 {
+                                    playPreviousVideo()
+                                }
+                            }
+                        }
+                )
             
             // Custom Playback controls overlay
             if showControls {
@@ -119,6 +148,16 @@ struct VideoDetailPlayerView: View {
                                 .foregroundColor(.white)
                                 .frame(width: 40, height: 40)
                                 .background(Color.purple.opacity(0.8))
+                                .clipShape(Circle())
+                        }
+                        
+                        // Shuffle/Random Video Button
+                        Button(action: playRandomVideo) {
+                            Image(systemName: "shuffle")
+                                .font(.title3)
+                                .foregroundColor(.white)
+                                .padding(12)
+                                .background(Color.black.opacity(0.6))
                                 .clipShape(Circle())
                         }
                         
@@ -261,15 +300,43 @@ struct VideoDetailPlayerView: View {
             guard !isDraggingSlider else { return }
             currentTime = player.currentTime().seconds
             
-            // Loop or reset back to zero if finished
+            // Loop automatically when finished
             if currentTime >= duration - 0.5 && duration > 0 {
-                isPlaying = false
                 player.seek(to: .zero)
+                player.play()
+                player.rate = playbackSpeed
                 currentTime = 0
+                isPlaying = true
             }
         }
         .onDisappear {
             player.pause()
+        }
+        .onChange(of: currentIndex) { newIndex in
+            guard newIndex >= 0 && newIndex < videos.count else { return }
+            let video = videos[newIndex]
+            player.pause()
+            
+            let newPlayer = AVPlayer(url: video.url)
+            self.player = newPlayer
+            self.isPlaying = true
+            self.currentTime = 0
+            self.duration = 0
+            
+            newPlayer.play()
+            newPlayer.rate = playbackSpeed
+            newPlayer.isMuted = isMuted
+            
+            if let item = newPlayer.currentItem {
+                let asset = item.asset
+                Task {
+                    if let dur = try? await asset.load(.duration) {
+                        DispatchQueue.main.async {
+                            self.duration = dur.seconds
+                        }
+                    }
+                }
+            }
         }
     }
     
@@ -332,5 +399,26 @@ struct VideoDetailPlayerView: View {
         } else {
             return String(format: "%d:%02d", minutes, secs)
         }
+    }
+    
+    private func playNextVideo() {
+        guard !videos.isEmpty else { return }
+        let nextIndex = (currentIndex + 1) % videos.count
+        currentIndex = nextIndex
+    }
+    
+    private func playPreviousVideo() {
+        guard !videos.isEmpty else { return }
+        let prevIndex = (currentIndex - 1 + videos.count) % videos.count
+        currentIndex = prevIndex
+    }
+    
+    private func playRandomVideo() {
+        guard videos.count > 1 else { return }
+        var randomIndex = Int.random(in: 0..<videos.count)
+        while randomIndex == currentIndex {
+            randomIndex = Int.random(in: 0..<videos.count)
+        }
+        currentIndex = randomIndex
     }
 }

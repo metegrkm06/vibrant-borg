@@ -128,6 +128,15 @@ struct VideoGridView: View {
             .navigationTitle("Offline Library")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button(action: {
+                        if !viewModel.filteredVideos.isEmpty {
+                            selectedVideo = viewModel.filteredVideos.randomElement()
+                        }
+                    }) {
+                        Label("Random Video", systemImage: "shuffle")
+                    }
+                }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button(action: { showWiFiModal = true }) {
                         HStack(spacing: 4) {
@@ -145,7 +154,11 @@ struct VideoGridView: View {
                 }
             }
             .sheet(item: $selectedVideo) { video in
-                VideoDetailPlayerView(url: video.url, title: video.title)
+                if let index = viewModel.filteredVideos.firstIndex(where: { $0.id == video.id }) {
+                    VideoDetailPlayerView(videos: viewModel.filteredVideos, startIndex: index)
+                } else {
+                    VideoDetailPlayerView(videos: [video], startIndex: 0)
+                }
             }
             .sheet(isPresented: $showWiFiModal, onDismiss: {
                 // Re-scan when modal closes, as files might have changed
