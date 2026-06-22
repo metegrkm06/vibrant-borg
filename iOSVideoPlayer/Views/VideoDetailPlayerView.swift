@@ -46,6 +46,7 @@ class PlayerUIView: UIView {
 }
 
 struct VideoDetailPlayerView: View {
+    @ObservedObject var viewModel: VideoLibraryViewModel
     let videos: [Video]
     @State private var currentIndex: Int
     @Environment(\.presentationMode) var presentationMode
@@ -62,12 +63,21 @@ struct VideoDetailPlayerView: View {
     @State private var playbackSpeed: Float = 1.0
     @State private var isAspectFill = false
     @State private var showVRMode = false
+    @State private var isLandscapeForced = false
+    
+    @State private var showSkipForwardAnimation = false
+    @State private var showSkipBackwardAnimation = false
+    
+    // New Feature States
+    @AppStorage("autoPlayNext") private var autoPlayNext = false
+    @AppStorage("playbackSpeedSetting") private var savedPlaybackSpeed: Double = 1.0
     
     private let timer = Timer.publish(every: 0.5, on: .main, in: .common).autoconnect()
     
     private var currentVideo: Video? {
         guard currentIndex >= 0 && currentIndex < videos.count else { return nil }
-        return videos[currentIndex]
+        let staticVideo = videos[currentIndex]
+        return viewModel.videos.first(where: { $0.id == staticVideo.id }) ?? staticVideo
     }
     
     private var url: URL {
@@ -78,7 +88,8 @@ struct VideoDetailPlayerView: View {
         return currentVideo?.title ?? "Video Player"
     }
     
-    init(videos: [Video], startIndex: Int) {
+    init(viewModel: VideoLibraryViewModel, videos: [Video], startIndex: Int) {
+        self.viewModel = viewModel
         self.videos = videos
         self._currentIndex = State(initialValue: startIndex)
         let initialVideo = videos[startIndex]
@@ -91,11 +102,8 @@ struct VideoDetailPlayerView: View {
             
             // Full Screen Video layer with dynamic aspect ratio gravity
             CustomPlayerView(player: player, videoGravity: isAspectFill ? .resizeAspectFill : .resizeAspect)
-                .onTapGesture {
-                    withAnimation {
-                        showControls.toggle()
-                    }
-                }
+                .rotationEffect(.degrees(isLandscapeForced ? 90 : 0))
+                .animation(.easeInOut, value: isLandscapeForced)
                 .gesture(
                     DragGesture(minimumDistance: 30, coordinateSpace: .local)
                         .onEnded { value in
@@ -112,6 +120,46 @@ struct VideoDetailPlayerView: View {
                         }
                 )
             
+            // Double Tap Overlay
+            HStack(spacing: 0) {
+                Color.white.opacity(0.001)
+                    .onTapGesture(count: 2) {
+                        skip(by: -10)
+                        withAnimation { showSkipBackwardAnimation = true }
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                            withAnimation { showSkipBackwardAnimation = false }
+                        }
+                    }
+                    .onTapGesture(count: 1) {
+                        withAnimation { showControls.toggle() }
+                    }
+                    .overlay(
+                        Image(systemName: "backward.end.fill")
+                            .font(.system(size: 40))
+                            .foregroundColor(.white)
+                            .opacity(showSkipBackwardAnimation ? 0.8 : 0)
+                            .scaleEffect(showSkipBackwardAnimation ? 1.2 : 0.8)
+                    )
+                
+                Color.white.opacity(0.001)
+                    .onTapGesture(count: 2) {
+                        skip(by: 10)
+                        withAnimation { showSkipForwardAnimation = true }
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                            withAnimation { showSkipForwardAnimation = false }
+                        }
+                    }
+                    .onTapGesture(count: 1) {
+                        withAnimation { showControls.toggle() }
+                    }
+                    .overlay(
+                        Image(systemName: "forward.end.fill")
+                            .font(.system(size: 40))
+                            .foregroundColor(.white)
+                            .opacity(showSkipForwardAnimation ? 0.8 : 0)
+                            .scaleEffect(showSkipForwardAnimation ? 1.2 : 0.8)
+                    )
+            }
             // Custom Playback controls overlay
             if showControls {
                 VStack {
@@ -136,6 +184,64 @@ struct VideoDetailPlayerView: View {
                             .padding(.leading, 8)
                         
                         Spacer()
+                        
+                        // Auto-Play Toggle
+                        Button(action: {
+                            withAnimation { autoPlayNext.toggle() }
+                        }) {
+                            Image(systemName: autoPlayNext ? "forward.end.fill" : "repeat")
+                                .font(.title3)
+                                .foregroundColor(.white)
+                                .padding(12)
+                                .background(Color.black.opacity(0.6))
+                                .clipShape(Circle())
+                        }
+                        
+                        // Bookmarks Menu
+                        Menu {
+                            if let video = currentVideo, !video.bookmarks.isEmpty {
+                                ForEach(video.bookmarks, id: \.self) { time in
+                                    Button(formatTime(time)) {
+                                        seek(to: time)
+                                    }
+                                }
+                            } else {
+                                Text("No Bookmarks")
+                            }
+                        } label: {
+                            Image(systemName: "list.bullet.rectangle.portrait")
+                                .font(.title3)
+                                .foregroundColor(.white)
+                                .padding(12)
+                                .background(Color.black.opacity(0.6))
+                                .clipShape(Circle())
+                        }
+                        
+                        // Add Bookmark Button
+                        Button(action: {
+                            if let video = currentVideo {
+                                viewModel.addBookmark(to: video, at: currentTime)
+                            }
+                        }) {
+                            Image(systemName: "bookmark.fill")
+                                .font(.title3)
+                                .foregroundColor(.white)
+                                .padding(12)
+                                .background(Color.black.opacity(0.6))
+                                .clipShape(Circle())
+                        }
+                        
+                        // Orientation Toggle
+                        Button(action: {
+                            withAnimation { isLandscapeForced.toggle() }
+                        }) {
+                            Image(systemName: isLandscapeForced ? "lock.rotation" : "lock.rotation.open")
+                                .font(.title3)
+                                .foregroundColor(.white)
+                                .padding(12)
+                                .background(Color.black.opacity(0.6))
+                                .clipShape(Circle())
+                        }
                         
                         // VR Mode Button
                         Button(action: {
@@ -276,6 +382,11 @@ struct VideoDetailPlayerView: View {
         }
         .statusBar(hidden: !showControls)
         .onAppear {
+            playbackSpeed = Float(savedPlaybackSpeed)
+            
+            if let video = currentVideo {
+                viewModel.incrementViewCount(for: video)
+            }
             player.play()
             isPlaying = true
             player.rate = playbackSpeed
@@ -302,11 +413,15 @@ struct VideoDetailPlayerView: View {
             
             // Loop automatically when finished
             if currentTime >= duration - 0.5 && duration > 0 {
-                player.seek(to: .zero)
-                player.play()
-                player.rate = playbackSpeed
-                currentTime = 0
-                isPlaying = true
+                if autoPlayNext {
+                    playNextVideo()
+                } else {
+                    player.seek(to: .zero)
+                    player.play()
+                    player.rate = playbackSpeed
+                    currentTime = 0
+                    isPlaying = true
+                }
             }
         }
         .onDisappear {
@@ -315,6 +430,7 @@ struct VideoDetailPlayerView: View {
         .onChange(of: currentIndex) { newIndex in
             guard newIndex >= 0 && newIndex < videos.count else { return }
             let video = videos[newIndex]
+            viewModel.incrementViewCount(for: video)
             player.pause()
             
             let newPlayer = AVPlayer(url: video.url)
@@ -360,6 +476,7 @@ struct VideoDetailPlayerView: View {
         if let idx = speeds.firstIndex(of: playbackSpeed) {
             let nextIdx = (idx + 1) % speeds.count
             playbackSpeed = speeds[nextIdx]
+            savedPlaybackSpeed = Double(playbackSpeed)
             if isPlaying {
                 player.rate = playbackSpeed
             }

@@ -7,6 +7,13 @@ struct VideoGridView: View {
     @State private var showWiFiModal = false
     @State private var selectedVideo: Video?
     
+    @State private var videoToRename: Video?
+    @State private var newVideoName: String = ""
+    @State private var isRenaming = false
+    
+    @State private var showNewPlaylistAlert = false
+    @State private var newPlaylistName: String = ""
+    
     // Adaptable grid column layouts for iPhone/iPad responsive UI
     private let columns = [
         GridItem(.adaptive(minimum: 150, maximum: 200), spacing: 16)
@@ -24,6 +31,42 @@ struct VideoGridView: View {
             .padding(8)
             .background(Color(.systemGray6))
             .cornerRadius(10)
+            
+            // Playlist Selector
+            Menu {
+                Button("All Videos") {
+                    withAnimation { viewModel.selectedPlaylist = nil }
+                }
+                Divider()
+                ForEach(viewModel.playlists) { playlist in
+                    Button(action: {
+                        withAnimation { viewModel.selectedPlaylist = playlist }
+                    }) {
+                        HStack {
+                            Text(playlist.name)
+                            if viewModel.selectedPlaylist?.id == playlist.id {
+                                Image(systemName: "checkmark")
+                            }
+                        }
+                    }
+                }
+                Divider()
+                Button(action: { showNewPlaylistAlert = true }) {
+                    Label("New Playlist", systemImage: "plus")
+                }
+            } label: {
+                HStack {
+                    Text(viewModel.selectedPlaylist?.name ?? "Playlists")
+                        .lineLimit(1)
+                    Image(systemName: "chevron.down")
+                }
+                .font(.subheadline)
+                .foregroundColor(.primary)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+                .background(Color(.systemGray6))
+                .cornerRadius(10)
+            }
             
             // Favorites Toggle Button
             Button(action: {
@@ -100,8 +143,48 @@ struct VideoGridView: View {
                             viewModel.toggleFavorite(for: video)
                         })
                         .contextMenu {
+                            Button(action: {
+                                videoToRename = video
+                                newVideoName = video.displayTitle
+                                isRenaming = true
+                            }) {
+                                Label("Rename", systemImage: "pencil")
+                            }
+                            
+                            Menu {
+                                ForEach(viewModel.playlists) { playlist in
+                                    Button(action: {
+                                        viewModel.addVideo(video, to: playlist)
+                                    }) {
+                                        if playlist.videoFilenames.contains(video.url.lastPathComponent) {
+                                            Label(playlist.name, systemImage: "checkmark")
+                                        } else {
+                                            Text(playlist.name)
+                                        }
+                                    }
+                                }
+                                Divider()
+                                Button(action: { showNewPlaylistAlert = true }) {
+                                    Label("New Playlist", systemImage: "plus")
+                                }
+                            } label: {
+                                Label("Add to Playlist", systemImage: "text.badge.plus")
+                            }
+                            
+                            if let playlist = viewModel.selectedPlaylist {
+                                Button(role: .destructive, action: {
+                                    withAnimation {
+                                        viewModel.removeVideo(video, from: playlist)
+                                    }
+                                }) {
+                                    Label("Remove from Playlist", systemImage: "minus.circle")
+                                }
+                            }
+                            
                             Button(role: .destructive, action: {
-                                viewModel.deleteVideo(at: video.url)
+                                withAnimation {
+                                    viewModel.deleteVideo(at: video.url)
+                                }
                             }) {
                                 Label("Delete Video", systemImage: "trash")
                             }
@@ -155,9 +238,9 @@ struct VideoGridView: View {
             }
             .sheet(item: $selectedVideo) { video in
                 if let index = viewModel.filteredVideos.firstIndex(where: { $0.id == video.id }) {
-                    VideoDetailPlayerView(videos: viewModel.filteredVideos, startIndex: index)
+                    VideoDetailPlayerView(viewModel: viewModel, videos: viewModel.filteredVideos, startIndex: index)
                 } else {
-                    VideoDetailPlayerView(videos: [video], startIndex: 0)
+                    VideoDetailPlayerView(viewModel: viewModel, videos: [video], startIndex: 0)
                 }
             }
             .sheet(isPresented: $showWiFiModal, onDismiss: {
@@ -168,5 +251,28 @@ struct VideoGridView: View {
             }
         }
         .navigationViewStyle(StackNavigationViewStyle()) // iPhone/iPad compatible
+        .alert("Rename Video", isPresented: $isRenaming) {
+            TextField("New Name", text: $newVideoName)
+            Button("Cancel", role: .cancel) { }
+            Button("Save") {
+                if let video = videoToRename {
+                    withAnimation {
+                        viewModel.renameVideo(video, to: newVideoName)
+                    }
+                }
+            }
+        }
+        .alert("New Playlist", isPresented: $showNewPlaylistAlert) {
+            TextField("Playlist Name", text: $newPlaylistName)
+            Button("Cancel", role: .cancel) { newPlaylistName = "" }
+            Button("Create") {
+                if !newPlaylistName.isEmpty {
+                    withAnimation {
+                        viewModel.createPlaylist(name: newPlaylistName)
+                    }
+                    newPlaylistName = ""
+                }
+            }
+        }
     }
 }

@@ -47,15 +47,24 @@ struct VideoCardView: View {
             // Text & Favorite actions
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(video.title)
+                    Text(video.displayTitle)
                         .font(.subheadline)
                         .fontWeight(.semibold)
                         .foregroundColor(.primary)
                         .lineLimit(1)
                     
-                    Text(formatDate(video.dateAdded))
-                        .font(.caption2)
-                        .foregroundColor(.secondary)
+                    HStack(spacing: 8) {
+                        Text(formatDate(video.dateAdded))
+                        
+                        if video.viewCount > 0 {
+                            HStack(spacing: 2) {
+                                Image(systemName: "eye.fill")
+                                Text("\(video.viewCount)")
+                            }
+                        }
+                    }
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
                 }
                 
                 Spacer()

@@ -8,6 +8,8 @@ class VideoLibraryViewModel: ObservableObject {
     @Published var searchText: String = ""
     @Published var sortBy: SortOption = .dateAdded
     @Published var showFavoritesOnly: Bool = false
+    @Published var playlists: [Playlist] = []
+    @Published var selectedPlaylist: Playlist? = nil
     
     enum SortOption {
         case name
@@ -28,6 +30,38 @@ class VideoLibraryViewModel: ObservableObject {
         }
     }
     
+    // Metadata dictionary mapping filename to VideoMetadata
+    private var videoMetadata: [String: VideoMetadata] {
+        get {
+            if let data = UserDefaults.standard.data(forKey: "VideoMetadataDict"),
+               let dict = try? JSONDecoder().decode([String: VideoMetadata].self, from: data) {
+                return dict
+            }
+            return [:]
+        }
+        set {
+            if let data = try? JSONEncoder().encode(newValue) {
+                UserDefaults.standard.set(data, forKey: "VideoMetadataDict")
+            }
+        }
+    }
+    
+    // Playlists persistence
+    private var savedPlaylists: [Playlist] {
+        get {
+            if let data = UserDefaults.standard.data(forKey: "SavedPlaylists"),
+               let array = try? JSONDecoder().decode([Playlist].self, from: data) {
+                return array
+            }
+            return []
+        }
+        set {
+            if let data = try? JSONEncoder().encode(newValue) {
+                UserDefaults.standard.set(data, forKey: "SavedPlaylists")
+            }
+        }
+    }
+    
     // Computes filtered and sorted list of videos
     var filteredVideos: [Video] {
         var result = videos
@@ -40,6 +74,11 @@ class VideoLibraryViewModel: ObservableObject {
         // Favorites filter
         if showFavoritesOnly {
             result = result.filter { $0.isFavorite }
+        }
+        
+        // Playlist filter
+        if let playlist = selectedPlaylist {
+            result = result.filter { playlist.videoFilenames.contains($0.url.lastPathComponent) }
         }
         
         // Sorting logic
@@ -56,6 +95,7 @@ class VideoLibraryViewModel: ObservableObject {
     }
     
     init() {
+        self.playlists = savedPlaylists
         scanDocumentsDirectory()
     }
     
@@ -83,6 +123,7 @@ class VideoLibraryViewModel: ObservableObject {
                 
                 var scannedVideos: [Video] = []
                 let favs = self.favoriteIDs
+                let metadataDict = self.videoMetadata
                 let cacheURL = self.fileManager.urls(for: .cachesDirectory, in: .userDomainMask)[0]
                 
                 for url in videoURLs {
@@ -96,6 +137,7 @@ class VideoLibraryViewModel: ObservableObject {
                     let asset = AVAsset(url: url)
                     let duration = asset.duration.seconds
                     let isFav = favs.contains(filename)
+                    let meta = metadataDict[filename] ?? VideoMetadata()
                     
                     // Try to load cached thumbnail from Caches directory
                     let thumbURL = cacheURL.appendingPathComponent(filename + ".jpg")
@@ -105,11 +147,14 @@ class VideoLibraryViewModel: ObservableObject {
                         id: UUID(),
                         url: url,
                         title: title,
+                        customTitle: meta.customTitle,
                         thumbnail: cachedImage,
                         duration: duration.isNaN ? 0 : duration,
                         dateAdded: dateAdded,
                         fileSize: fileSize,
-                        isFavorite: isFav
+                        isFavorite: isFav,
+                        viewCount: meta.viewCount,
+                        bookmarks: meta.bookmarks
                     )
                     
                     scannedVideos.append(video)
@@ -202,6 +247,86 @@ class VideoLibraryViewModel: ObservableObject {
             try? fileManager.removeItem(at: thumbURL)
         } catch {
             print("Error deleting video file: \(error)")
+        }
+    }
+    
+    // MARK: - Metadata & Playlist Actions
+    
+    func renameVideo(_ video: Video, to newName: String) {
+        let filename = video.url.lastPathComponent
+        var dict = videoMetadata
+        var meta = dict[filename] ?? VideoMetadata()
+        meta.customTitle = newName.isEmpty ? nil : newName
+        dict[filename] = meta
+        videoMetadata = dict
+        
+        if let index = videos.firstIndex(where: { $0.id == video.id }) {
+            videos[index].customTitle = meta.customTitle
+        }
+    }
+    
+    func incrementViewCount(for video: Video) {
+        let filename = video.url.lastPathComponent
+        var dict = videoMetadata
+        var meta = dict[filename] ?? VideoMetadata()
+        meta.viewCount += 1
+        dict[filename] = meta
+        videoMetadata = dict
+        
+        if let index = videos.firstIndex(where: { $0.id == video.id }) {
+            videos[index].viewCount = meta.viewCount
+        }
+    }
+    
+    func addBookmark(to video: Video, at time: Double) {
+        let filename = video.url.lastPathComponent
+        var dict = videoMetadata
+        var meta = dict[filename] ?? VideoMetadata()
+        if !meta.bookmarks.contains(time) {
+            meta.bookmarks.append(time)
+            meta.bookmarks.sort()
+            dict[filename] = meta
+            videoMetadata = dict
+            
+            if let index = videos.firstIndex(where: { $0.id == video.id }) {
+                videos[index].bookmarks = meta.bookmarks
+            }
+        }
+    }
+
+    func createPlaylist(name: String) {
+        let newPlaylist = Playlist(name: name)
+        playlists.append(newPlaylist)
+        savedPlaylists = playlists
+    }
+    
+    func addVideo(_ video: Video, to playlist: Playlist) {
+        if let index = playlists.firstIndex(where: { $0.id == playlist.id }) {
+            let filename = video.url.lastPathComponent
+            if !playlists[index].videoFilenames.contains(filename) {
+                playlists[index].videoFilenames.append(filename)
+                savedPlaylists = playlists
+            }
+        }
+    }
+    
+    func removeVideo(_ video: Video, from playlist: Playlist) {
+        if let index = playlists.firstIndex(where: { $0.id == playlist.id }) {
+            let filename = video.url.lastPathComponent
+            playlists[index].videoFilenames.removeAll { $0 == filename }
+            savedPlaylists = playlists
+            
+            if selectedPlaylist?.id == playlist.id {
+                selectedPlaylist = playlists[index]
+            }
+        }
+    }
+
+    func deletePlaylist(_ playlist: Playlist) {
+        playlists.removeAll { $0.id == playlist.id }
+        savedPlaylists = playlists
+        if selectedPlaylist?.id == playlist.id {
+            selectedPlaylist = nil
         }
     }
 }
