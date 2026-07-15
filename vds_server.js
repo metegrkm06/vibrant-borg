@@ -78,8 +78,11 @@ app.get('/videos', authenticate, (req, res) => {
 });
 
 // 2. Download/Stream a video
-app.get('/download/*', authenticate, (req, res) => {
-    const relativePath = req.params[0];
+app.get('/download', authenticate, (req, res) => {
+    const relativePath = req.query.file;
+    if (!relativePath) {
+        return res.status(400).json({ error: 'Missing file parameter' });
+    }
     const filePath = path.join(VIDEOS_DIR, relativePath);
     
     if (filePath.startsWith(VIDEOS_DIR) && fs.existsSync(filePath)) {

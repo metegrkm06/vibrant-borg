@@ -79,15 +79,15 @@ class VDSNetworkManager: ObservableObject {
     }
     
     func getStreamAsset(for video: VDSVideo) -> AVURLAsset? {
-        let encodedFilename = video.filename.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? video.filename
-        guard let url = URL(string: "\(baseURL)/download/\(encodedFilename)") else { return nil }
+        let encodedFilename = video.filename.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? video.filename
+        guard let url = URL(string: "\(baseURL)/download?file=\(encodedFilename)") else { return nil }
         let options = ["AVURLAssetHTTPHeaderFieldsKey": ["x-secret-token": secretToken]]
         return AVURLAsset(url: url, options: options)
     }
 
     func downloadVideo(_ video: VDSVideo, completion: @escaping (Bool) -> Void) {
-        let encodedFilename = video.filename.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? video.filename
-        guard let url = URL(string: "\(baseURL)/download/\(encodedFilename)") else { return }
+        let encodedFilename = video.filename.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? video.filename
+        guard let url = URL(string: "\(baseURL)/download?file=\(encodedFilename)") else { return }
         
         var request = URLRequest(url: url)
         request.setValue(secretToken, forHTTPHeaderField: "x-secret-token")
