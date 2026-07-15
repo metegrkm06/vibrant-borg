@@ -95,33 +95,42 @@ class VDSNetworkManager: ObservableObject {
         isDownloading = true
         
         URLSession.shared.downloadTask(with: request) { [weak self] localURL, response, error in
-            DispatchQueue.main.async {
-                self?.isDownloading = false
-                
-                if let error = error {
+            if let error = error {
+                DispatchQueue.main.async {
+                    self?.isDownloading = false
                     self?.errorMessage = error.localizedDescription
                     completion(false)
-                    return
                 }
-                
-                guard let localURL = localURL else {
+                return
+            }
+            
+            guard let localURL = localURL else {
+                DispatchQueue.main.async {
+                    self?.isDownloading = false
                     completion(false)
-                    return
                 }
+                return
+            }
+            
+            // Keep the final file name flat in the app's document directory
+            let flatFilename = video.filename.components(separatedBy: "/").last ?? video.filename
+            
+            let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            let destinationURL = documentsPath.appendingPathComponent(flatFilename)
+            
+            do {
+                if FileManager.default.fileExists(atPath: destinationURL.path) {
+                    try FileManager.default.removeItem(at: destinationURL)
+                }
+                try FileManager.default.moveItem(at: localURL, to: destinationURL)
                 
-                // Keep the final file name flat in the app's document directory
-                let flatFilename = video.filename.components(separatedBy: "/").last ?? video.filename
-                
-                let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-                let destinationURL = documentsPath.appendingPathComponent(flatFilename)
-                
-                do {
-                    if FileManager.default.fileExists(atPath: destinationURL.path) {
-                        try FileManager.default.removeItem(at: destinationURL)
-                    }
-                    try FileManager.default.moveItem(at: localURL, to: destinationURL)
+                DispatchQueue.main.async {
+                    self?.isDownloading = false
                     completion(true)
-                } catch {
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    self?.isDownloading = false
                     self?.errorMessage = "Failed to save video: \(error.localizedDescription)"
                     completion(false)
                 }
