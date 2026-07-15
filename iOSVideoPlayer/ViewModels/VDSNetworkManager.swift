@@ -79,13 +79,15 @@ class VDSNetworkManager: ObservableObject {
     }
     
     func getStreamAsset(for video: VDSVideo) -> AVURLAsset? {
-        guard let url = URL(string: "\(baseURL)/download/\(video.filename)") else { return nil }
+        let encodedFilename = video.filename.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? video.filename
+        guard let url = URL(string: "\(baseURL)/download/\(encodedFilename)") else { return nil }
         let options = ["AVURLAssetHTTPHeaderFieldsKey": ["x-secret-token": secretToken]]
         return AVURLAsset(url: url, options: options)
     }
 
     func downloadVideo(_ video: VDSVideo, completion: @escaping (Bool) -> Void) {
-        guard let url = URL(string: "\(baseURL)/download/\(video.filename)") else { return }
+        let encodedFilename = video.filename.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? video.filename
+        guard let url = URL(string: "\(baseURL)/download/\(encodedFilename)") else { return }
         
         var request = URLRequest(url: url)
         request.setValue(secretToken, forHTTPHeaderField: "x-secret-token")
@@ -107,8 +109,11 @@ class VDSNetworkManager: ObservableObject {
                     return
                 }
                 
+                // Keep the final file name flat in the app's document directory
+                let flatFilename = video.filename.components(separatedBy: "/").last ?? video.filename
+                
                 let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-                let destinationURL = documentsPath.appendingPathComponent(video.filename)
+                let destinationURL = documentsPath.appendingPathComponent(flatFilename)
                 
                 do {
                     if FileManager.default.fileExists(atPath: destinationURL.path) {

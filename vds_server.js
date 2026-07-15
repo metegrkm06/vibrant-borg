@@ -38,30 +38,51 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage: storage });
 
+// Function to recursively get all files
+function getAllFiles(dirPath, arrayOfFiles) {
+    const files = fs.readdirSync(dirPath);
+    
+    arrayOfFiles = arrayOfFiles || [];
+    
+    files.forEach(function(file) {
+        if (fs.statSync(path.join(dirPath, file)).isDirectory()) {
+            arrayOfFiles = getAllFiles(path.join(dirPath, file), arrayOfFiles);
+        } else {
+            arrayOfFiles.push(path.join(dirPath, file));
+        }
+    });
+    
+    return arrayOfFiles;
+}
+
 // 1. Get list of videos
 app.get('/videos', authenticate, (req, res) => {
-    fs.readdir(VIDEOS_DIR, (err, files) => {
-        if (err) return res.status(500).json({ error: 'Failed to read directory' });
+    try {
+        const allFiles = getAllFiles(VIDEOS_DIR);
+        const videoFiles = allFiles.filter(f => f.endsWith('.mp4') || f.endsWith('.mov') || f.endsWith('.m4v'));
         
-        const videoFiles = files.filter(f => f.endsWith('.mp4') || f.endsWith('.mov') || f.endsWith('.m4v'));
-        
-        const fileData = videoFiles.map(file => {
-            const stats = fs.statSync(path.join(VIDEOS_DIR, file));
+        const fileData = videoFiles.map(filePath => {
+            const stats = fs.statSync(filePath);
+            const relativePath = path.relative(VIDEOS_DIR, filePath).replace(/\\/g, '/');
             return {
-                filename: file,
+                filename: relativePath,
                 sizeBytes: stats.size,
                 createdAt: stats.birthtime
             };
         });
         
         res.json({ videos: fileData });
-    });
+    } catch (err) {
+        res.status(500).json({ error: 'Failed to read directory' });
+    }
 });
 
 // 2. Download/Stream a video
-app.get('/download/:filename', authenticate, (req, res) => {
-    const filePath = path.join(VIDEOS_DIR, req.params.filename);
-    if (fs.existsSync(filePath)) {
+app.get('/download/*', authenticate, (req, res) => {
+    const relativePath = req.params[0];
+    const filePath = path.join(VIDEOS_DIR, relativePath);
+    
+    if (filePath.startsWith(VIDEOS_DIR) && fs.existsSync(filePath)) {
         res.sendFile(filePath);
     } else {
         res.status(404).json({ error: 'File not found' });
