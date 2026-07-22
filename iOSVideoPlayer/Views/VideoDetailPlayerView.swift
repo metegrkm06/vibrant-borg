@@ -72,6 +72,14 @@ struct VideoDetailPlayerView: View {
     @AppStorage("autoPlayNext") private var autoPlayNext = false
     @AppStorage("playbackSpeedSetting") private var savedPlaybackSpeed: Double = 1.0
     
+    // Audio and Subtitle selection states
+    @State private var audioOptions: [AVMediaSelectionOption] = []
+    @State private var selectedAudioOption: AVMediaSelectionOption?
+    @State private var subtitleOptions: [AVMediaSelectionOption] = []
+    @State private var selectedSubtitleOption: AVMediaSelectionOption?
+    @State private var audioGroup: AVMediaSelectionGroup?
+    @State private var subtitleGroup: AVMediaSelectionGroup?
+    
     private let timer = Timer.publish(every: 0.5, on: .main, in: .common).autoconnect()
     
     private var currentVideo: Video? {
@@ -319,6 +327,58 @@ struct VideoDetailPlayerView: View {
                                 .clipShape(Circle())
                         }
                         
+                        // Audio & Subtitles Menu
+                        Menu {
+                            Section(header: Text("Audio Tracks")) {
+                                if audioOptions.isEmpty {
+                                    Text("Default Audio")
+                                } else {
+                                    ForEach(audioOptions, id: \.self) { option in
+                                        Button(action: {
+                                            selectAudioOption(option)
+                                        }) {
+                                            if option == selectedAudioOption {
+                                                Label(option.displayName, systemImage: "checkmark")
+                                            } else {
+                                                Text(option.displayName)
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            
+                            Section(header: Text("Subtitles")) {
+                                Button(action: {
+                                    selectSubtitleOption(nil)
+                                }) {
+                                    if selectedSubtitleOption == nil {
+                                        Label("Off", systemImage: "checkmark")
+                                    } else {
+                                        Text("Off")
+                                    }
+                                }
+                                
+                                ForEach(subtitleOptions, id: \.self) { option in
+                                    Button(action: {
+                                        selectSubtitleOption(option)
+                                    }) {
+                                        if option == selectedSubtitleOption {
+                                            Label(option.displayName, systemImage: "checkmark")
+                                        } else {
+                                            Text(option.displayName)
+                                        }
+                                    }
+                                }
+                            }
+                        } label: {
+                            Image(systemName: "captions.bubble.fill")
+                                .font(.title3)
+                                .foregroundColor(.white)
+                                .padding(12)
+                                .background(Color.black.opacity(0.6))
+                                .clipShape(Circle())
+                        }
+                        
                         // Toggle Mute / Sound Button
                         Button(action: toggleMute) {
                             Image(systemName: isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
@@ -433,6 +493,7 @@ struct VideoDetailPlayerView: View {
                                 self.duration = dur.seconds
                             }
                         }
+                        await loadMediaSelections(for: item)
                     }
                 } else {
                     self.duration = asset.duration.seconds
@@ -483,6 +544,7 @@ struct VideoDetailPlayerView: View {
                             self.duration = dur.seconds
                         }
                     }
+                    await loadMediaSelections(for: item)
                 }
             }
         }
@@ -569,5 +631,45 @@ struct VideoDetailPlayerView: View {
             randomIndex = Int.random(in: 0..<videos.count)
         }
         currentIndex = randomIndex
+    }
+    
+    private func loadMediaSelections(for item: AVPlayerItem) async {
+        let asset = item.asset
+        do {
+            let loadedAudioGroup = try await asset.loadMediaSelectionGroup(for: .audible)
+            let loadedSubtitleGroup = try await asset.loadMediaSelectionGroup(for: .legible)
+            
+            let selectedAudio = loadedAudioGroup.flatMap { item.currentMediaSelection.selectedMediaOption(in: $0) }
+            let selectedSubtitle = loadedSubtitleGroup.flatMap { item.currentMediaSelection.selectedMediaOption(in: $0) }
+            
+            DispatchQueue.main.async {
+                self.audioGroup = loadedAudioGroup
+                self.audioOptions = loadedAudioGroup?.options ?? []
+                self.selectedAudioOption = selectedAudio
+                
+                self.subtitleGroup = loadedSubtitleGroup
+                self.subtitleOptions = loadedSubtitleGroup?.options ?? []
+                self.selectedSubtitleOption = selectedSubtitle
+            }
+        } catch {
+            print("Error loading media selections: \(error.localizedDescription)")
+        }
+    }
+    
+    private func selectAudioOption(_ option: AVMediaSelectionOption) {
+        guard let currentItem = player.currentItem, let group = audioGroup else { return }
+        currentItem.select(option, in: group)
+        selectedAudioOption = option
+    }
+    
+    private func selectSubtitleOption(_ option: AVMediaSelectionOption?) {
+        guard let currentItem = player.currentItem, let group = subtitleGroup else { return }
+        if let option = option {
+            currentItem.select(option, in: group)
+            selectedSubtitleOption = option
+        } else {
+            currentItem.select(nil, in: group)
+            selectedSubtitleOption = nil
+        }
     }
 }
