@@ -1,6 +1,7 @@
 import SwiftUI
 import PhotosUI
 import UniformTypeIdentifiers
+import Photos
 
 struct GalleryHomeView: View {
     @ObservedObject var viewModel: VideoLibraryViewModel
@@ -9,6 +10,8 @@ struct GalleryHomeView: View {
     @StateObject private var wifiManager = WiFiServerManager()
     @State private var showWiFiModal = false
     @State private var showPhotoPicker = false
+    @State private var showDeleteConfirmation = false
+    @State private var importedAssetIdentifiers: [String] = []
     
     var body: some View {
         NavigationView {
@@ -88,7 +91,13 @@ struct GalleryHomeView: View {
             }
             .sheet(isPresented: $showPhotoPicker) {
                 PhotoPicker(isPresented: $showPhotoPicker) { results in
-                    viewModel.importFromPhotoLibrary(results: results)
+                    let identifiers = results.compactMap { $0.assetIdentifier }
+                    viewModel.importFromPhotoLibrary(results: results) { success in
+                        if success && !identifiers.isEmpty {
+                            self.importedAssetIdentifiers = identifiers
+                            self.showDeleteConfirmation = true
+                        }
+                    }
                 }
             }
             .sheet(isPresented: $showWiFiModal, onDismiss: {
@@ -96,8 +105,32 @@ struct GalleryHomeView: View {
             }) {
                 WiFiSharingView(wifiManager: wifiManager)
             }
+            .alert("Delete Imported Files?", isPresented: $showDeleteConfirmation) {
+                Button("Delete", role: .destructive) {
+                    deleteAssetsFromPhotoLibrary(identifiers: importedAssetIdentifiers)
+                    importedAssetIdentifiers = []
+                }
+                Button("Keep", role: .cancel) {
+                    importedAssetIdentifiers = []
+                }
+            } message: {
+                Text("Do you want to delete the imported media from your system Photo Library?")
+            }
         }
         .navigationViewStyle(StackNavigationViewStyle())
+    }
+    
+    private func deleteAssetsFromPhotoLibrary(identifiers: [String]) {
+        let assets = PHAsset.fetchAssets(withLocalIdentifiers: identifiers, options: nil)
+        guard assets.count > 0 else { return }
+        
+        PHPhotoLibrary.shared().performChanges({
+            PHAssetChangeRequest.deleteAssets(assets)
+        }) { success, error in
+            if let error = error {
+                print("Error requesting photo deletion: \(error.localizedDescription)")
+            }
+        }
     }
 }
 

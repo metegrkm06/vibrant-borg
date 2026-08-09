@@ -445,54 +445,71 @@ class VideoLibraryViewModel: ObservableObject {
     
     // MARK: - Photo Library Import
     
-    func importFromPhotoLibrary(results: [PHPickerResult]) {
-        guard let documentsURL = fileManager.urls(for: .documentDirectory, in: .userDomainMask).first else { return }
+    func importFromPhotoLibrary(results: [PHPickerResult], completion: @escaping (Bool) -> Void) {
+        guard let documentsURL = fileManager.urls(for: .documentDirectory, in: .userDomainMask).first else {
+            completion(false)
+            return
+        }
         let targetURL = isDecoyMode ? documentsURL.appendingPathComponent("decoy") : documentsURL
+        
+        let group = DispatchGroup()
+        var successCount = 0
         
         for result in results {
             let provider = result.itemProvider
+            group.enter()
             
             // Try GIF first
             if provider.hasItemConformingToTypeIdentifier("com.compuserve.gif") {
                 provider.loadDataRepresentation(forTypeIdentifier: "com.compuserve.gif") { [weak self] data, error in
-                    guard let data = data else { return }
-                    let filename = "imported_\(Int(Date().timeIntervalSince1970))_\(Int.random(in: 1000...9999)).gif"
-                    let destURL = targetURL.appendingPathComponent(filename)
-                    try? data.write(to: destURL)
-                    DispatchQueue.main.async {
-                        self?.scanDocumentsDirectory()
+                    if let data = data {
+                        let filename = "imported_\(Int(Date().timeIntervalSince1970))_\(Int.random(in: 1000...9999)).gif"
+                        let destURL = targetURL.appendingPathComponent(filename)
+                        if (try? data.write(to: destURL)) != nil {
+                            successCount += 1
+                        }
                     }
+                    group.leave()
                 }
             }
             // Try video
             else if provider.hasItemConformingToTypeIdentifier("public.movie") {
                 provider.loadFileRepresentation(forTypeIdentifier: "public.movie") { [weak self] url, error in
-                    guard let url = url else { return }
-                    let ext = url.pathExtension.isEmpty ? "mp4" : url.pathExtension
-                    let filename = "imported_\(Int(Date().timeIntervalSince1970))_\(Int.random(in: 1000...9999)).\(ext)"
-                    let destURL = targetURL.appendingPathComponent(filename)
-                    try? FileManager.default.copyItem(at: url, to: destURL)
-                    DispatchQueue.main.async {
-                        self?.scanDocumentsDirectory()
+                    if let url = url {
+                        let ext = url.pathExtension.isEmpty ? "mp4" : url.pathExtension
+                        let filename = "imported_\(Int(Date().timeIntervalSince1970))_\(Int.random(in: 1000...9999)).\(ext)"
+                        let destURL = targetURL.appendingPathComponent(filename)
+                        if (try? FileManager.default.copyItem(at: url, to: destURL)) != nil {
+                            successCount += 1
+                        }
                     }
+                    group.leave()
                 }
             }
             // Try image
             else if provider.hasItemConformingToTypeIdentifier("public.image") {
                 provider.loadDataRepresentation(forTypeIdentifier: "public.image") { [weak self] data, error in
-                    guard let data = data else { return }
-                    // Detect if it's HEIC/PNG/JPG
-                    var ext = "jpg"
-                    if provider.hasItemConformingToTypeIdentifier("public.png") { ext = "png" }
-                    else if provider.hasItemConformingToTypeIdentifier("public.heic") { ext = "heic" }
-                    let filename = "imported_\(Int(Date().timeIntervalSince1970))_\(Int.random(in: 1000...9999)).\(ext)"
-                    let destURL = targetURL.appendingPathComponent(filename)
-                    try? data.write(to: destURL)
-                    DispatchQueue.main.async {
-                        self?.scanDocumentsDirectory()
+                    if let data = data {
+                        // Detect if it's HEIC/PNG/JPG
+                        var ext = "jpg"
+                        if provider.hasItemConformingToTypeIdentifier("public.png") { ext = "png" }
+                        else if provider.hasItemConformingToTypeIdentifier("public.heic") { ext = "heic" }
+                        let filename = "imported_\(Int(Date().timeIntervalSince1970))_\(Int.random(in: 1000...9999)).\(ext)"
+                        let destURL = targetURL.appendingPathComponent(filename)
+                        if (try? data.write(to: destURL)) != nil {
+                            successCount += 1
+                        }
                     }
+                    group.leave()
                 }
+            } else {
+                group.leave()
             }
+        }
+        
+        group.notify(queue: .main) { [weak self] in
+            self?.scanDocumentsDirectory()
+            completion(successCount > 0)
         }
     }
 }
