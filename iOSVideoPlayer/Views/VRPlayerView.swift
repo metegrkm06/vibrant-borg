@@ -350,7 +350,7 @@ class VRSceneManager: ObservableObject {
             currentTarget = "moving_target"
             hitPoint = SCNVector3(p1.x + fwd.x * 5, p1.y + fwd.y * 5, p1.z + fwd.z * 5)
         } else {
-            let hits = scene.rootNode.hitTestWithSegment(from: p1, to: p2, options: nil)
+            let hits = scene.rootNode.hitTestWithSegment(from: p1, to: p2, options: [SCNHitTestOption.firstFoundOnly.rawValue: true])
             if let hit = hits.first(where: { $0.node.name?.starts(with: "btn_") == true }) {
                 currentTarget = hit.node.name
                 hitPoint = hit.worldCoordinates
