@@ -42,8 +42,7 @@ struct CalculatorLockView: View {
                                         Image(systemName: showWebhookSuccess ? "checkmark.circle.fill" : "paperplane.fill")
                                         Text(showWebhookSuccess ? "Sent!" : "Send Webhook")
                                     }
-                                    .font(.subheadline)
-                                    .fontWeight(.bold)
+                                    .font(.subheadline.weight(.bold))
                                     .foregroundColor(showWebhookSuccess ? .green : .white)
                                     .padding(.horizontal, 14)
                                     .padding(.vertical, 8)
@@ -103,8 +102,7 @@ struct CalculatorLockView: View {
                                     Image(systemName: showWebhookSuccess ? "checkmark.circle.fill" : "paperplane.fill")
                                     Text(showWebhookSuccess ? "Sent!" : "Send Webhook")
                                 }
-                                .font(.subheadline)
-                                .fontWeight(.bold)
+                                .font(.subheadline.weight(.bold))
                                 .foregroundColor(showWebhookSuccess ? .green : .white)
                                 .padding(.horizontal, 14)
                                 .padding(.vertical, 8)
