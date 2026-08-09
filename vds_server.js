@@ -7,11 +7,11 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 const SECRET_TOKEN = 'my_super_secret_password_123'; // CHANGE THIS PASSWORD!
 
-const VIDEOS_DIR = path.join(__dirname, 'videos');
+const MEDIA_DIR = path.join(__dirname, 'videos');
 
-// Ensure videos directory exists
-if (!fs.existsSync(VIDEOS_DIR)) {
-    fs.mkdirSync(VIDEOS_DIR, { recursive: true });
+// Ensure media directory exists
+if (!fs.existsSync(MEDIA_DIR)) {
+    fs.mkdirSync(MEDIA_DIR, { recursive: true });
 }
 
 // Authentication Middleware
@@ -27,7 +27,7 @@ const authenticate = (req, res, next) => {
 // Setup Multer for file uploads
 const storage = multer.diskStorage({
     destination: (req, file, cb) => {
-        cb(null, VIDEOS_DIR);
+        cb(null, MEDIA_DIR);
     },
     filename: (req, file, cb) => {
         // Keep original filename but prevent overwrites
@@ -55,15 +55,20 @@ function getAllFiles(dirPath, arrayOfFiles) {
     return arrayOfFiles;
 }
 
-// 1. Get list of videos
+const videoExts = ['.mp4', '.mov', '.m4v'];
+const imageExts = ['.jpg', '.jpeg', '.png', '.heic', '.webp'];
+const gifExts = ['.gif'];
+const allMediaExts = [...videoExts, ...imageExts, ...gifExts];
+
+// 1. Get list of videos only (legacy endpoint)
 app.get('/videos', authenticate, (req, res) => {
     try {
-        const allFiles = getAllFiles(VIDEOS_DIR);
-        const videoFiles = allFiles.filter(f => f.endsWith('.mp4') || f.endsWith('.mov') || f.endsWith('.m4v'));
+        const allFiles = getAllFiles(MEDIA_DIR);
+        const videoFiles = allFiles.filter(f => videoExts.includes(path.extname(f).toLowerCase()));
         
         const fileData = videoFiles.map(filePath => {
             const stats = fs.statSync(filePath);
-            const relativePath = path.relative(VIDEOS_DIR, filePath).replace(/\\/g, '/');
+            const relativePath = path.relative(MEDIA_DIR, filePath).replace(/\\/g, '/');
             return {
                 filename: relativePath,
                 sizeBytes: stats.size,
@@ -77,34 +82,66 @@ app.get('/videos', authenticate, (req, res) => {
     }
 });
 
-// 2. Download/Stream a video
+// 1b. Get ALL media (videos, images, gifs)
+app.get('/media', authenticate, (req, res) => {
+    try {
+        const allFiles = getAllFiles(MEDIA_DIR);
+        
+        const categorize = (exts) => allFiles
+            .filter(f => exts.includes(path.extname(f).toLowerCase()))
+            .map(filePath => {
+                const stats = fs.statSync(filePath);
+                const relativePath = path.relative(MEDIA_DIR, filePath).replace(/\\/g, '/');
+                return { filename: relativePath, sizeBytes: stats.size, createdAt: stats.birthtime };
+            });
+        
+        res.json({
+            videos: categorize(videoExts),
+            images: categorize(imageExts),
+            gifs: categorize(gifExts)
+        });
+    } catch (err) {
+        res.status(500).json({ error: 'Failed to read directory' });
+    }
+});
+
+// 2. Download/Stream a file
 app.get('/download', authenticate, (req, res) => {
     const relativePath = req.query.file;
     if (!relativePath) {
         return res.status(400).json({ error: 'Missing file parameter' });
     }
-    const filePath = path.join(VIDEOS_DIR, relativePath);
+    const filePath = path.join(MEDIA_DIR, relativePath);
     
-    if (filePath.startsWith(VIDEOS_DIR) && fs.existsSync(filePath)) {
+    if (filePath.startsWith(MEDIA_DIR) && fs.existsSync(filePath)) {
         res.sendFile(filePath);
     } else {
         res.status(404).json({ error: 'File not found' });
     }
 });
 
-// 3. Upload a video
+// 3. Upload single file
 app.post('/upload', authenticate, upload.single('video'), (req, res) => {
     if (!req.file) {
-        return res.status(400).json({ error: 'No video file provided' });
+        return res.status(400).json({ error: 'No file provided' });
     }
     res.json({ message: 'Upload successful', filename: req.file.filename });
 });
 
+// 4. Bulk upload (multiple files at once)
+app.post('/upload-bulk', authenticate, upload.array('files', 50), (req, res) => {
+    if (!req.files || req.files.length === 0) {
+        return res.status(400).json({ error: 'No files provided' });
+    }
+    const uploaded = req.files.map(f => f.filename);
+    res.json({ message: `${uploaded.length} files uploaded`, filenames: uploaded });
+});
+
 app.listen(PORT, '0.0.0.0', () => {
     console.log(`========================================`);
-    console.log(`🎥 VDS Video Server Running!`);
+    console.log(`🗂️  VDS Media Server Running!`);
     console.log(`Port: ${PORT}`);
     console.log(`Secret Token: ${SECRET_TOKEN}`);
-    console.log(`Saving videos to: ${VIDEOS_DIR}`);
+    console.log(`Saving media to: ${MEDIA_DIR}`);
     console.log(`========================================`);
 });

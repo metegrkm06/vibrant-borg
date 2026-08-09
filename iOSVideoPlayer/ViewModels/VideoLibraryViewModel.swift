@@ -1,9 +1,12 @@
 import Foundation
 import UIKit
 import AVFoundation
+import PhotosUI
 
 class VideoLibraryViewModel: ObservableObject {
     @Published var videos: [Video] = []
+    @Published var images: [MediaItem] = []
+    @Published var gifs: [MediaItem] = []
     @Published var isLoading: Bool = false
     @Published var searchText: String = ""
     @Published var sortBy: SortOption = .dateAdded
@@ -115,11 +118,14 @@ class VideoLibraryViewModel: ObservableObject {
                     options: [.skipsHiddenFiles]
                 )
                 
-                // Keep only .mp4 and .mov extensions
-                let videoURLs = fileURLs.filter { url in
-                    let ext = url.pathExtension.lowercased()
-                    return ext == "mp4" || ext == "mov"
-                }
+                let videoExtensions = Set(["mp4", "mov", "m4v"])
+                let imageExtensions = Set(["jpg", "jpeg", "png", "heic", "webp"])
+                let gifExtensions = Set(["gif"])
+                
+                // Keep only video extensions
+                let videoURLs = fileURLs.filter { videoExtensions.contains($0.pathExtension.lowercased()) }
+                let imageURLs = fileURLs.filter { imageExtensions.contains($0.pathExtension.lowercased()) }
+                let gifURLs = fileURLs.filter { gifExtensions.contains($0.pathExtension.lowercased()) }
                 
                 var scannedVideos: [Video] = []
                 let favs = self.favoriteIDs
@@ -160,8 +166,80 @@ class VideoLibraryViewModel: ObservableObject {
                     scannedVideos.append(video)
                 }
                 
+                // Scan images
+                var scannedImages: [MediaItem] = []
+                for url in imageURLs {
+                    let resourceValues = try? url.resourceValues(forKeys: [.creationDateKey, .fileSizeKey])
+                    let dateAdded = resourceValues?.creationDate ?? Date()
+                    let fileSize = Int64(resourceValues?.fileSize ?? 0)
+                    
+                    // Generate thumbnail
+                    let thumbURL = cacheURL.appendingPathComponent(url.lastPathComponent + ".thumb.jpg")
+                    var thumb = UIImage(contentsOfFile: thumbURL.path)
+                    if thumb == nil, let fullImage = UIImage(contentsOfFile: url.path) {
+                        let size = CGSize(width: 200, height: 200)
+                        UIGraphicsBeginImageContextWithOptions(size, true, 1.0)
+                        fullImage.draw(in: CGRect(origin: .zero, size: size))
+                        thumb = UIGraphicsGetImageFromCurrentImageContext()
+                        UIGraphicsEndImageContext()
+                        if let jpegData = thumb?.jpegData(compressionQuality: 0.7) {
+                            try? jpegData.write(to: thumbURL)
+                        }
+                    }
+                    
+                    let item = MediaItem(
+                        id: UUID(),
+                        url: url,
+                        filename: url.lastPathComponent,
+                        thumbnail: thumb,
+                        dateAdded: dateAdded,
+                        fileSize: fileSize,
+                        mediaType: .image
+                    )
+                    scannedImages.append(item)
+                }
+                
+                // Scan GIFs
+                var scannedGifs: [MediaItem] = []
+                for url in gifURLs {
+                    let resourceValues = try? url.resourceValues(forKeys: [.creationDateKey, .fileSizeKey])
+                    let dateAdded = resourceValues?.creationDate ?? Date()
+                    let fileSize = Int64(resourceValues?.fileSize ?? 0)
+                    
+                    // Generate first-frame thumbnail for GIF
+                    let thumbURL = cacheURL.appendingPathComponent(url.lastPathComponent + ".thumb.jpg")
+                    var thumb = UIImage(contentsOfFile: thumbURL.path)
+                    if thumb == nil, let data = try? Data(contentsOf: url),
+                       let source = CGImageSourceCreateWithData(data as CFData, nil),
+                       let cgImage = CGImageSourceCreateImageAtIndex(source, 0, nil) {
+                        thumb = UIImage(cgImage: cgImage)
+                        let size = CGSize(width: 200, height: 200)
+                        UIGraphicsBeginImageContextWithOptions(size, true, 1.0)
+                        thumb?.draw(in: CGRect(origin: .zero, size: size))
+                        let resized = UIGraphicsGetImageFromCurrentImageContext()
+                        UIGraphicsEndImageContext()
+                        thumb = resized
+                        if let jpegData = thumb?.jpegData(compressionQuality: 0.7) {
+                            try? jpegData.write(to: thumbURL)
+                        }
+                    }
+                    
+                    let item = MediaItem(
+                        id: UUID(),
+                        url: url,
+                        filename: url.lastPathComponent,
+                        thumbnail: thumb,
+                        dateAdded: dateAdded,
+                        fileSize: fileSize,
+                        mediaType: .gif
+                    )
+                    scannedGifs.append(item)
+                }
+                
                 DispatchQueue.main.async {
                     self.videos = scannedVideos
+                    self.images = scannedImages.sorted { $0.dateAdded > $1.dateAdded }
+                    self.gifs = scannedGifs.sorted { $0.dateAdded > $1.dateAdded }
                     self.isLoading = false
                     // Start generating thumbnails for scanned videos that lack them
                     self.generateThumbnails()
@@ -327,6 +405,77 @@ class VideoLibraryViewModel: ObservableObject {
         savedPlaylists = playlists
         if selectedPlaylist?.id == playlist.id {
             selectedPlaylist = nil
+        }
+    }
+    
+    // MARK: - Media Item Actions
+    
+    func deleteMediaItem(_ item: MediaItem) {
+        do {
+            try fileManager.removeItem(at: item.url)
+            if item.mediaType == .image {
+                images.removeAll { $0.url == item.url }
+            } else {
+                gifs.removeAll { $0.url == item.url }
+            }
+            // Delete cached thumbnail
+            let cacheURL = fileManager.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+            let thumbURL = cacheURL.appendingPathComponent(item.filename + ".thumb.jpg")
+            try? fileManager.removeItem(at: thumbURL)
+        } catch {
+            print("Error deleting media: \(error)")
+        }
+    }
+    
+    // MARK: - Photo Library Import
+    
+    func importFromPhotoLibrary(results: [PHPickerResult]) {
+        guard let documentsURL = fileManager.urls(for: .documentDirectory, in: .userDomainMask).first else { return }
+        
+        for result in results {
+            let provider = result.itemProvider
+            
+            // Try GIF first
+            if provider.hasItemConformingToTypeIdentifier("com.compuserve.gif") {
+                provider.loadDataRepresentation(forTypeIdentifier: "com.compuserve.gif") { [weak self] data, error in
+                    guard let data = data else { return }
+                    let filename = "imported_\(Int(Date().timeIntervalSince1970))_\(Int.random(in: 1000...9999)).gif"
+                    let destURL = documentsURL.appendingPathComponent(filename)
+                    try? data.write(to: destURL)
+                    DispatchQueue.main.async {
+                        self?.scanDocumentsDirectory()
+                    }
+                }
+            }
+            // Try video
+            else if provider.hasItemConformingToTypeIdentifier("public.movie") {
+                provider.loadFileRepresentation(forTypeIdentifier: "public.movie") { [weak self] url, error in
+                    guard let url = url else { return }
+                    let ext = url.pathExtension.isEmpty ? "mp4" : url.pathExtension
+                    let filename = "imported_\(Int(Date().timeIntervalSince1970))_\(Int.random(in: 1000...9999)).\(ext)"
+                    let destURL = documentsURL.appendingPathComponent(filename)
+                    try? FileManager.default.copyItem(at: url, to: destURL)
+                    DispatchQueue.main.async {
+                        self?.scanDocumentsDirectory()
+                    }
+                }
+            }
+            // Try image
+            else if provider.hasItemConformingToTypeIdentifier("public.image") {
+                provider.loadDataRepresentation(forTypeIdentifier: "public.image") { [weak self] data, error in
+                    guard let data = data else { return }
+                    // Detect if it's HEIC/PNG/JPG
+                    var ext = "jpg"
+                    if provider.hasItemConformingToTypeIdentifier("public.png") { ext = "png" }
+                    else if provider.hasItemConformingToTypeIdentifier("public.heic") { ext = "heic" }
+                    let filename = "imported_\(Int(Date().timeIntervalSince1970))_\(Int.random(in: 1000...9999)).\(ext)"
+                    let destURL = documentsURL.appendingPathComponent(filename)
+                    try? data.write(to: destURL)
+                    DispatchQueue.main.async {
+                        self?.scanDocumentsDirectory()
+                    }
+                }
+            }
         }
     }
 }

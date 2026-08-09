@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct VideoGridView: View {
-    @StateObject private var viewModel = VideoLibraryViewModel()
+    @ObservedObject var viewModel: VideoLibraryViewModel
     @StateObject private var wifiManager = WiFiServerManager()
     
     @State private var showWiFiModal = false

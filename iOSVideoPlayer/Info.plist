@@ -53,5 +53,7 @@
 		<key>NSAllowsArbitraryLoads</key>
 		<true/>
 	</dict>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Import photos, videos, and GIFs from your Photo Library into the vault.</string>
 </dict>
 </plist>
