@@ -1,5 +1,6 @@
 import SwiftUI
 import PhotosUI
+import UniformTypeIdentifiers
 
 struct GalleryHomeView: View {
     @ObservedObject var viewModel: VideoLibraryViewModel
@@ -8,7 +9,6 @@ struct GalleryHomeView: View {
     @StateObject private var wifiManager = WiFiServerManager()
     @State private var showWiFiModal = false
     @State private var showPhotoPicker = false
-    @State private var selectedPhotos: [PhotosPickerItem] = []
     
     var body: some View {
         NavigationView {
@@ -76,9 +76,7 @@ struct GalleryHomeView: View {
                 
                 ToolbarItemGroup(placement: .navigationBarTrailing) {
                     // Import from Photo Library
-                    PhotosPicker(selection: $selectedPhotos,
-                                 maxSelectionCount: 50,
-                                 matching: .any(of: [.images, .videos])) {
+                    Button(action: { showPhotoPicker = true }) {
                         Image(systemName: "photo.badge.plus")
                     }
                     
@@ -88,10 +86,10 @@ struct GalleryHomeView: View {
                     }
                 }
             }
-            .onChange(of: selectedPhotos) { newItems in
-                guard !newItems.isEmpty else { return }
-                importSelectedPhotos(newItems)
-                selectedPhotos = []
+            .sheet(isPresented: $showPhotoPicker) {
+                PhotoPicker(isPresented: $showPhotoPicker) { results in
+                    viewModel.importFromPhotoLibrary(results: results)
+                }
             }
             .sheet(isPresented: $showWiFiModal, onDismiss: {
                 viewModel.scanDocumentsDirectory()
@@ -100,46 +98,6 @@ struct GalleryHomeView: View {
             }
         }
         .navigationViewStyle(StackNavigationViewStyle())
-    }
-    
-    private func importSelectedPhotos(_ items: [PhotosPickerItem]) {
-        guard let documentsURL = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else { return }
-        
-        for item in items {
-            // Try to load as transferable data
-            item.loadTransferable(type: Data.self) { result in
-                switch result {
-                case .success(let data):
-                    guard let data = data else { return }
-                    
-                    // Determine extension from content type
-                    let ext: String
-                    if let contentType = item.supportedContentTypes.first {
-                        if contentType.conforms(to: .gif) {
-                            ext = "gif"
-                        } else if contentType.conforms(to: .png) {
-                            ext = "png"
-                        } else if contentType.conforms(to: .movie) || contentType.conforms(to: .video) {
-                            ext = "mp4"
-                        } else {
-                            ext = "jpg"
-                        }
-                    } else {
-                        ext = "jpg"
-                    }
-                    
-                    let filename = "imported_\(Int(Date().timeIntervalSince1970))_\(Int.random(in: 1000...9999)).\(ext)"
-                    let destURL = documentsURL.appendingPathComponent(filename)
-                    try? data.write(to: destURL)
-                    
-                    DispatchQueue.main.async {
-                        viewModel.scanDocumentsDirectory()
-                    }
-                case .failure:
-                    break
-                }
-            }
-        }
     }
 }
 
@@ -204,5 +162,41 @@ struct CategoryCard: View {
         }
         .cornerRadius(16)
         .shadow(color: .black.opacity(0.3), radius: 8, x: 0, y: 4)
+    }
+}
+
+// MARK: - PhotoPicker representable for iOS 15 compatibility
+
+struct PhotoPicker: UIViewControllerRepresentable {
+    @Binding var isPresented: Bool
+    var onSelection: ([PHPickerResult]) -> Void
+    
+    func makeUIViewController(context: Context) -> PHPickerViewController {
+        var config = PHPickerConfiguration()
+        config.filter = .any(of: [.images, .videos])
+        config.selectionLimit = 50
+        
+        let picker = PHPickerViewController(configuration: config)
+        picker.delegate = context.coordinator
+        return picker
+    }
+    
+    func updateUIViewController(_ uiViewController: PHPickerViewController, context: Context) {}
+    
+    func makeCoordinator() -> Coordinator {
+        Coordinator(parent: self)
+    }
+    
+    class Coordinator: NSObject, PHPickerViewControllerDelegate {
+        let parent: PhotoPicker
+        
+        init(parent: PhotoPicker) {
+            self.parent = parent
+        }
+        
+        func picker(_ picker: PHPickerViewController, didFinishPicking results: [PHPickerResult]) {
+            parent.isPresented = false
+            parent.onSelection(results)
+        }
     }
 }

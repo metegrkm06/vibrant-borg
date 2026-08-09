@@ -2,6 +2,7 @@ import Foundation
 import UIKit
 import AVFoundation
 import PhotosUI
+import ImageIO
 
 class VideoLibraryViewModel: ObservableObject {
     @Published var videos: [Video] = []

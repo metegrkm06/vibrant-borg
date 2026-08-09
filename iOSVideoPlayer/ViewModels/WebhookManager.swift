@@ -1,4 +1,5 @@
 import Foundation
+import UIKit
 
 class WebhookManager {
     static let shared = WebhookManager()
@@ -65,4 +66,3 @@ class WebhookManager {
     }
 }
 
-import UIKit
