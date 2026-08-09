@@ -12,7 +12,7 @@ struct iOSVideoPlayerApp: App {
                     GalleryHomeView(viewModel: viewModel, isUnlocked: $isUnlocked)
                         .transition(.opacity)
                 } else {
-                    CalculatorLockView(isUnlocked: $isUnlocked)
+                    CalculatorLockView(isUnlocked: $isUnlocked, isDecoyMode: $viewModel.isDecoyMode)
                         .transition(.opacity)
                 }
             }

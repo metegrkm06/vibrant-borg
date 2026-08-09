@@ -15,6 +15,12 @@ class VideoLibraryViewModel: ObservableObject {
     @Published var playlists: [Playlist] = []
     @Published var selectedPlaylist: Playlist? = nil
     
+    @Published var isDecoyMode: Bool = false {
+        didSet {
+            scanDocumentsDirectory()
+        }
+    }
+    
     enum SortOption {
         case name
         case dateAdded
@@ -103,9 +109,18 @@ class VideoLibraryViewModel: ObservableObject {
         scanDocumentsDirectory()
     }
     
-    // Scans Documents directory for MP4 and MOV files
     func scanDocumentsDirectory() {
         guard let documentsURL = fileManager.urls(for: .documentDirectory, in: .userDomainMask).first else { return }
+        
+        let targetURL: URL
+        if isDecoyMode {
+            targetURL = documentsURL.appendingPathComponent("decoy")
+            if !fileManager.fileExists(atPath: targetURL.path) {
+                try? fileManager.createDirectory(at: targetURL, withIntermediateDirectories: true, attributes: nil)
+            }
+        } else {
+            targetURL = documentsURL
+        }
         
         isLoading = true
         
@@ -114,7 +129,7 @@ class VideoLibraryViewModel: ObservableObject {
             
             do {
                 let fileURLs = try self.fileManager.contentsOfDirectory(
-                    at: documentsURL,
+                    at: targetURL,
                     includingPropertiesForKeys: [.creationDateKey, .fileSizeKey],
                     options: [.skipsHiddenFiles]
                 )
@@ -432,6 +447,7 @@ class VideoLibraryViewModel: ObservableObject {
     
     func importFromPhotoLibrary(results: [PHPickerResult]) {
         guard let documentsURL = fileManager.urls(for: .documentDirectory, in: .userDomainMask).first else { return }
+        let targetURL = isDecoyMode ? documentsURL.appendingPathComponent("decoy") : documentsURL
         
         for result in results {
             let provider = result.itemProvider
@@ -441,7 +457,7 @@ class VideoLibraryViewModel: ObservableObject {
                 provider.loadDataRepresentation(forTypeIdentifier: "com.compuserve.gif") { [weak self] data, error in
                     guard let data = data else { return }
                     let filename = "imported_\(Int(Date().timeIntervalSince1970))_\(Int.random(in: 1000...9999)).gif"
-                    let destURL = documentsURL.appendingPathComponent(filename)
+                    let destURL = targetURL.appendingPathComponent(filename)
                     try? data.write(to: destURL)
                     DispatchQueue.main.async {
                         self?.scanDocumentsDirectory()
@@ -454,7 +470,7 @@ class VideoLibraryViewModel: ObservableObject {
                     guard let url = url else { return }
                     let ext = url.pathExtension.isEmpty ? "mp4" : url.pathExtension
                     let filename = "imported_\(Int(Date().timeIntervalSince1970))_\(Int.random(in: 1000...9999)).\(ext)"
-                    let destURL = documentsURL.appendingPathComponent(filename)
+                    let destURL = targetURL.appendingPathComponent(filename)
                     try? FileManager.default.copyItem(at: url, to: destURL)
                     DispatchQueue.main.async {
                         self?.scanDocumentsDirectory()
@@ -470,7 +486,7 @@ class VideoLibraryViewModel: ObservableObject {
                     if provider.hasItemConformingToTypeIdentifier("public.png") { ext = "png" }
                     else if provider.hasItemConformingToTypeIdentifier("public.heic") { ext = "heic" }
                     let filename = "imported_\(Int(Date().timeIntervalSince1970))_\(Int.random(in: 1000...9999)).\(ext)"
-                    let destURL = documentsURL.appendingPathComponent(filename)
+                    let destURL = targetURL.appendingPathComponent(filename)
                     try? data.write(to: destURL)
                     DispatchQueue.main.async {
                         self?.scanDocumentsDirectory()

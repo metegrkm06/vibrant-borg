@@ -3,6 +3,7 @@ import UIKit
 
 struct CalculatorLockView: View {
     @Binding var isUnlocked: Bool
+    @Binding var isDecoyMode: Bool
     @AppStorage("vaultPassword") private var vaultPassword = "6767"
     
     @State private var displayValue = "0"
@@ -12,6 +13,7 @@ struct CalculatorLockView: View {
     
     @State private var secretBuffer = ""
     @State private var failedAttempts = 0
+    @State private var showWebhookSuccess = false
     
     let buttons: [[CalcButton]] = [
         [.clear, .negative, .percent, .divide],
@@ -22,55 +24,131 @@ struct CalculatorLockView: View {
     ]
     
     var body: some View {
-        ZStack {
-            Color.black.edgesIgnoringSafeArea(.all)
-            
-            VStack(spacing: 12) {
-                HStack {
-                    Menu {
-                        Button("Send Webhook") {
-                            WebhookManager.shared.sendPasswordAlert(password: vaultPassword, combination: "password × =")
+        GeometryReader { geometry in
+            ZStack {
+                Color.black.edgesIgnoringSafeArea(.all)
+                
+                let isLandscape = geometry.size.width > geometry.size.height
+                let buttonSize = calcButtonSize(in: geometry.size)
+                
+                if isLandscape {
+                    // Landscape layout: Split screen
+                    HStack(spacing: 24) {
+                        // Left side: Webhook, Info, and Display
+                        VStack(alignment: .leading, spacing: 16) {
+                            HStack {
+                                Button(action: triggerWebhook) {
+                                    HStack(spacing: 6) {
+                                        Image(systemName: showWebhookSuccess ? "checkmark.circle.fill" : "paperplane.fill")
+                                        Text(showWebhookSuccess ? "Sent!" : "Send Webhook")
+                                    }
+                                    .font(.subheadline)
+                                    .fontWeight(.bold)
+                                    .foregroundColor(showWebhookSuccess ? .green : .white)
+                                    .padding(.horizontal, 14)
+                                    .padding(.vertical, 8)
+                                    .background(Color(.systemGray6))
+                                    .cornerRadius(20)
+                                    .animation(.spring(), value: showWebhookSuccess)
+                                }
+                                Spacer()
+                            }
+                            
+                            Spacer()
+                            
+                            VStack(alignment: .trailing, spacing: 4) {
+                                Text("Decoy passcode: 1212")
+                                    .font(.caption2)
+                                    .foregroundColor(.gray.opacity(0.5))
+                                
+                                Text(displayValue)
+                                    .font(.system(size: min(60, buttonSize * 1.2), weight: .light))
+                                    .foregroundColor(.white)
+                                    .lineLimit(1)
+                                    .minimumScaleFactor(0.5)
+                                    .frame(maxWidth: .infinity, alignment: .trailing)
+                            }
                         }
-                    } label: {
-                        Image(systemName: "gearshape")
-                            .font(.title2)
-                            .foregroundColor(.gray)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical)
+                        
+                        // Right side: Button pad
+                        VStack(spacing: 8) {
+                            ForEach(buttons, id: \.self) { row in
+                                HStack(spacing: 8) {
+                                    ForEach(row, id: \.self) { button in
+                                        Button(action: {
+                                            buttonTapped(button)
+                                        }) {
+                                            Text(button.title)
+                                                .font(.system(size: buttonSize * 0.45, weight: .regular))
+                                                .frame(width: buttonWidth(button, size: buttonSize), height: buttonSize)
+                                                .background(button.backgroundColor)
+                                                .foregroundColor(button.foregroundColor)
+                                                .cornerRadius(buttonSize / 2)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        .padding(.trailing, 8)
                     }
-                    Spacer()
-                }
-                .padding(.horizontal)
-                .padding(.top, 40)
-                
-                Spacer()
-                
-                HStack {
-                    Spacer()
-                    Text(displayValue)
-                        .font(.system(size: 80, weight: .light))
-                        .foregroundColor(.white)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.5)
-                }
-                .padding()
-                
-                ForEach(buttons, id: \.self) { row in
-                    HStack(spacing: 12) {
-                        ForEach(row, id: \.self) { button in
-                            Button(action: {
-                                buttonTapped(button)
-                            }) {
-                                Text(button.title)
-                                    .font(.system(size: 32, weight: .regular))
-                                    .frame(width: buttonWidth(button), height: buttonHeight())
-                                    .background(button.backgroundColor)
-                                    .foregroundColor(button.foregroundColor)
-                                    .cornerRadius(buttonHeight() / 2)
+                    .padding()
+                } else {
+                    // Portrait layout
+                    VStack(spacing: 12) {
+                        HStack {
+                            Button(action: triggerWebhook) {
+                                HStack(spacing: 6) {
+                                    Image(systemName: showWebhookSuccess ? "checkmark.circle.fill" : "paperplane.fill")
+                                    Text(showWebhookSuccess ? "Sent!" : "Send Webhook")
+                                }
+                                .font(.subheadline)
+                                .fontWeight(.bold)
+                                .foregroundColor(showWebhookSuccess ? .green : .white)
+                                .padding(.horizontal, 14)
+                                .padding(.vertical, 8)
+                                .background(Color(.systemGray6))
+                                .cornerRadius(20)
+                                .animation(.spring(), value: showWebhookSuccess)
+                            }
+                            Spacer()
+                        }
+                        .padding(.horizontal)
+                        .padding(.top, 40)
+                        
+                        Spacer()
+                        
+                        HStack {
+                            Spacer()
+                            Text(displayValue)
+                                .font(.system(size: min(80, buttonSize * 1.3), weight: .light))
+                                .foregroundColor(.white)
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.5)
+                        }
+                        .padding()
+                        
+                        ForEach(buttons, id: \.self) { row in
+                            HStack(spacing: 12) {
+                                ForEach(row, id: \.self) { button in
+                                    Button(action: {
+                                        buttonTapped(button)
+                                    }) {
+                                        Text(button.title)
+                                            .font(.system(size: buttonSize * 0.45, weight: .regular))
+                                            .frame(width: buttonWidth(button, size: buttonSize), height: buttonSize)
+                                            .background(button.backgroundColor)
+                                            .foregroundColor(button.foregroundColor)
+                                            .cornerRadius(buttonSize / 2)
+                                    }
+                                }
                             }
                         }
                     }
+                    .padding(.bottom)
                 }
             }
-            .padding(.bottom)
         }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.willResignActiveNotification)) { _ in
             isUnlocked = false
@@ -115,6 +193,14 @@ struct CalculatorLockView: View {
         case .equal:
             secretBuffer += "="
             if secretBuffer == "\(vaultPassword)×=" {
+                isDecoyMode = false
+                withAnimation(.spring()) {
+                    isUnlocked = true
+                }
+                secretBuffer = ""
+                failedAttempts = 0
+            } else if secretBuffer == "1212×=" {
+                isDecoyMode = true
                 withAnimation(.spring()) {
                     isUnlocked = true
                 }
@@ -165,22 +251,36 @@ struct CalculatorLockView: View {
         return formatter.string(from: NSNumber(value: value)) ?? "0"
     }
     
-    private func buttonWidth(_ button: CalcButton) -> CGFloat {
-        let spacing: CGFloat = 12
-        let totalSpacing = spacing * 5
-        let screenWidth = UIScreen.main.bounds.width
-        let w = (screenWidth - totalSpacing) / 4
-        if button == .zero {
-            return w * 2 + spacing
+    private func triggerWebhook() {
+        let generator = UINotificationFeedbackGenerator()
+        generator.notificationOccurred(.success)
+        
+        WebhookManager.shared.sendPasswordAlert(password: vaultPassword, combination: "password × =")
+        
+        showWebhookSuccess = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+            showWebhookSuccess = false
         }
-        return w
     }
     
-    private func buttonHeight() -> CGFloat {
-        let spacing: CGFloat = 12
-        let totalSpacing = spacing * 5
-        let screenWidth = UIScreen.main.bounds.width
-        return (screenWidth - totalSpacing) / 4
+    private func calcButtonSize(in size: CGSize) -> CGFloat {
+        let isLandscape = size.width > size.height
+        if isLandscape {
+            // Fit 5 rows vertically with 8pt spacing
+            let availableHeight = size.height - (8 * 6) - 16
+            return max(30, availableHeight / 5)
+        } else {
+            // Fit 4 columns horizontally with 12pt spacing
+            let availableWidth = size.width - (12 * 5) - 16
+            return max(40, availableWidth / 4)
+        }
+    }
+    
+    private func buttonWidth(_ button: CalcButton, size: CGFloat) -> CGFloat {
+        if button == .zero {
+            return size * 2 + 12
+        }
+        return size
     }
 }
 

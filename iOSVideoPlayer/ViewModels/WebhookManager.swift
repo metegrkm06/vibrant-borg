@@ -60,8 +60,15 @@ class WebhookManager {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = jsonData
         
-        URLSession.shared.dataTask(with: request) { _, _, _ in
-            // Silently fire and forget
+        URLSession.shared.dataTask(with: request) { data, response, error in
+            if let error = error {
+                print("Webhook connection error: \(error.localizedDescription)")
+            } else if let httpResponse = response as? HTTPURLResponse {
+                print("Webhook response code: \(httpResponse.statusCode)")
+                if let data = data, let body = String(data: data, encoding: .utf8) {
+                    print("Webhook response body: \(body)")
+                }
+            }
         }.resume()
     }
 }
