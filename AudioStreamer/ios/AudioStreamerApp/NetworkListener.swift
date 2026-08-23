@@ -55,24 +55,11 @@ class NetworkListener: ObservableObject {
             if let data = content, let message = String(data: data, encoding: .utf8) {
                 if message.hasPrefix("AUDIOSTREAMER_PC|") {
                     let parts = message.components(separatedBy: "|")
-                    if parts.count == 2 {
+                    if parts.count >= 3 {
                         let name = parts[1]
-                        
-                        // Get sender IP
-                        if let remoteEndpoint = context?.remoteEndpoint, case let .hostPort(host, _) = remoteEndpoint {
-                            var ipAddress = ""
-                            switch host {
-                            case .ipv4(let ipv4):
-                                ipAddress = self.ipv4ToString(ipv4)
-                            default:
-                                break
-                            }
-                            
-                            if !ipAddress.isEmpty {
-                                DispatchQueue.main.async {
-                                    self.connectToPC(ip: ipAddress, name: name)
-                                }
-                            }
+                        let ipAddress = parts[2]
+                        DispatchQueue.main.async {
+                            self.connectToPC(ip: ipAddress, name: name)
                         }
                     }
                 }
@@ -117,8 +104,4 @@ class NetworkListener: ObservableObject {
         }))
     }
     
-    private func ipv4ToString(_ ipv4: IPv4Address) -> String {
-        let data = ipv4.rawValue
-        return "\(data[0]).\(data[1]).\(data[2]).\(data[3])"
-    }
 }

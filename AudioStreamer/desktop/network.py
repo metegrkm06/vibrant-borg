@@ -35,8 +35,16 @@ class NetworkManager:
                 msg = data.decode('utf-8')
                 
                 if msg == "DISCOVER":
-                    # Respond with PC Name
-                    response = f"AUDIOSTREAMER_PC|{self.pc_name}"
+                    # Respond with PC Name and IP
+                    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                    try:
+                        s.connect(('10.255.255.255', 1))
+                        my_ip = s.getsockname()[0]
+                    except:
+                        my_ip = '127.0.0.1'
+                    finally:
+                        s.close()
+                    response = f"AUDIOSTREAMER_PC|{self.pc_name}|{my_ip}"
                     self.sock.sendto(response.encode('utf-8'), addr)
                     
                 elif msg.startswith("CONNECT|"):
