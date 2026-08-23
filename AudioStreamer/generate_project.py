@@ -95,7 +95,7 @@ pbxproj = f"""// !$*UTF8*$!
 \t\t\tchildren = (
 {children}
 \t\t\t);
-\t\t\tpath = AudioStreamerApp;
+\t\t\tpath = ios/AudioStreamerApp;
 \t\t\tsourceTree = "<group>";
 \t\t}};
 \t\t{PROJECT_ID}MAINGROUP /* = */ = {{
@@ -214,7 +214,7 @@ pbxproj = f"""// !$*UTF8*$!
 \t\t\t\tCODE_SIGNING_REQUIRED = YES;
 \t\t\t\tAD_HOC_CODE_SIGNING_ALLOWED = YES;
 \t\t\t\tIPHONEOS_DEPLOYMENT_TARGET = 15.0;
-\t\t\t\tINFOPLIST_FILE = AudioStreamerApp/Info.plist;
+\t\t\t\tINFOPLIST_FILE = ios/AudioStreamerApp/Info.plist;
 \t\t\t\tPRODUCT_BUNDLE_IDENTIFIER = "com.vibrantborg.AudioStreamerApp";
 \t\t\t\tPRODUCT_NAME = "$(TARGET_NAME)";
 \t\t\t\tSWIFT_VERSION = 5.9;
@@ -230,7 +230,7 @@ pbxproj = f"""// !$*UTF8*$!
 \t\t\t\tCODE_SIGNING_REQUIRED = YES;
 \t\t\t\tAD_HOC_CODE_SIGNING_ALLOWED = YES;
 \t\t\t\tIPHONEOS_DEPLOYMENT_TARGET = 15.0;
-\t\t\t\tINFOPLIST_FILE = AudioStreamerApp/Info.plist;
+\t\t\t\tINFOPLIST_FILE = ios/AudioStreamerApp/Info.plist;
 \t\t\t\tPRODUCT_BUNDLE_IDENTIFIER = "com.vibrantborg.AudioStreamerApp";
 \t\t\t\tPRODUCT_NAME = "$(TARGET_NAME)";
 \t\t\t\tSWIFT_VERSION = 5.9;
