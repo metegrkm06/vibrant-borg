@@ -13,21 +13,17 @@ class AudioEngine: ObservableObject {
     
     private var udpListener: NWListener?
     private var tcpListener: NWListener?
+    private var activeTCPConnection: NWConnection?
     
-    private var isPlaying = false
-    private let audioFormat = AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: 48000, channels: 2, interleaved: true)!
     private let floatFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 48000, channels: 2, interleaved: false)!
-    private let converter: AVAudioConverter
     
     init() {
-        converter = AVAudioConverter(from: audioFormat, to: floatFormat)!
         setupEngine()
         setupAudioSession()
         
         NotificationCenter.default.addObserver(self, selector: #selector(handleConfigurationChange), name: .AVAudioEngineConfigurationChange, object: engine)
         NotificationCenter.default.addObserver(self, selector: #selector(handleRouteChange), name: AVAudioSession.routeChangeNotification, object: nil)
         
-        // Start listening automatically on launch for both USB and Wi-Fi
         startListening()
     }
     
@@ -83,6 +79,7 @@ class AudioEngine: ObservableObject {
         guard udpListener == nil else { return }
         do {
             let params = NWParameters.udp
+            params.allowLocalEndpointReuse = true
             udpListener = try NWListener(using: params, on: 5000)
             udpListener?.newConnectionHandler = { [weak self] newConnection in
                 newConnection.start(queue: .global(qos: .userInteractive))
@@ -110,8 +107,10 @@ class AudioEngine: ObservableObject {
         guard tcpListener == nil else { return }
         do {
             let params = NWParameters.tcp
+            params.allowLocalEndpointReuse = true
             tcpListener = try NWListener(using: params, on: 5002)
             tcpListener?.newConnectionHandler = { [weak self] newConnection in
+                self?.activeTCPConnection = newConnection
                 newConnection.start(queue: .global(qos: .userInteractive))
                 DispatchQueue.main.async {
                     self?.isUSBConnected = true
@@ -122,7 +121,7 @@ class AudioEngine: ObservableObject {
             }
             tcpListener?.start(queue: .global(qos: .userInteractive))
         } catch {
-            print("Failed to start TCP listener for USB: \(error)")
+            print("Failed to start TCP listener: \(error)")
         }
     }
     
@@ -131,6 +130,9 @@ class AudioEngine: ObservableObject {
             guard let self = self, let lengthData = lengthData, lengthData.count == 4, error == nil else {
                 DispatchQueue.main.async {
                     self?.isUSBConnected = false
+                    if self?.activeTCPConnection === connection {
+                        self?.activeTCPConnection = nil
+                    }
                 }
                 return
             }
@@ -168,31 +170,36 @@ class AudioEngine: ObservableObject {
         }
     }
     
+    func sendUSBCommand(_ cmd: String) {
+        if let connection = activeTCPConnection {
+            let data = cmd.data(using: .utf8)
+            connection.send(content: data, completion: .contentProcessed({ _ in }))
+        }
+    }
+    
     private func processPacket(_ data: Data) {
-        // Packet: Seq(4) + TS(8) + PCM(1920)
+        // Packet: Seq(4 bytes) + Timestamp(8 bytes) + PCM Int16 Stereo(N bytes)
         let pcmData = data.dropFirst(12)
+        let frameCount = AVAudioFrameCount(pcmData.count / 4) // 2 channels * 2 bytes = 4 bytes per frame
+        guard frameCount > 0 else { return }
         
-        let frameCapacity = AVAudioFrameCount(pcmData.count / 4) // 2 channels * 2 bytes = 4 bytes per frame
-        guard let pcmBuffer = AVAudioPCMBuffer(pcmFormat: audioFormat, frameCapacity: frameCapacity) else { return }
-        pcmBuffer.frameLength = frameCapacity
+        guard let floatBuffer = AVAudioPCMBuffer(pcmFormat: floatFormat, frameCapacity: frameCount) else { return }
+        floatBuffer.frameLength = frameCount
         
+        guard let leftChannel = floatBuffer.floatChannelData?[0],
+              let rightChannel = floatBuffer.floatChannelData?[1] else { return }
+        
+        // Fast direct linear de-interleaving and float conversion (eliminates converter filter distortion)
         pcmData.withUnsafeBytes { rawBufferPointer in
-            guard let source = rawBufferPointer.bindMemory(to: Int16.self).baseAddress else { return }
-            let dest = pcmBuffer.int16ChannelData![0]
-            memcpy(dest, source, pcmData.count)
+            guard let int16Ptr = rawBufferPointer.bindMemory(to: Int16.self).baseAddress else { return }
+            let count = Int(frameCount)
+            for i in 0..<count {
+                leftChannel[i] = Float(int16Ptr[i * 2]) / 32768.0
+                rightChannel[i] = Float(int16Ptr[i * 2 + 1]) / 32768.0
+            }
         }
         
-        guard let floatBuffer = AVAudioPCMBuffer(pcmFormat: floatFormat, frameCapacity: frameCapacity) else { return }
-        
-        var error: NSError? = nil
-        converter.convert(to: floatBuffer, error: &error, withInputFrom: { inNumPackets, outStatus in
-            outStatus.pointee = .haveData
-            return pcmBuffer
-        })
-        
-        if error == nil {
-            scheduleBuffer(floatBuffer)
-        }
+        scheduleBuffer(floatBuffer)
     }
     
     private var queuedBuffers = 0
@@ -201,17 +208,18 @@ class AudioEngine: ObservableObject {
         queuedBuffers += 1
         
         DispatchQueue.main.async {
-            self.latencyMs = self.queuedBuffers * 10
+            self.latencyMs = self.queuedBuffers * 20
         }
         
-        if queuedBuffers > 5 {
+        // Smooth jitter buffer: prevent latency buildup without clicking
+        if queuedBuffers > 8 {
             queuedBuffers -= 1
             return
         }
         
         player.scheduleBuffer(buffer) {
             DispatchQueue.main.async {
-                self.queuedBuffers -= 1
+                self.queuedBuffers = max(0, self.queuedBuffers - 1)
             }
         }
         
@@ -222,5 +230,14 @@ class AudioEngine: ObservableObject {
     
     func setVolume(_ volume: Float) {
         player.volume = volume
+    }
+    
+    func reset() {
+        player.stop()
+        queuedBuffers = 0
+        isUSBConnected = false
+        activeTCPConnection?.cancel()
+        activeTCPConnection = nil
+        player.play()
     }
 }

@@ -3,7 +3,7 @@ import socket
 import threading
 import time
 from audio import AudioStreamer
-from network import NetworkManager
+from network import NetworkManager, trigger_media_key, VK_MEDIA_PLAY_PAUSE, VK_MEDIA_NEXT_TRACK, VK_MEDIA_PREV_TRACK
 from usbmux import USBMux
 import qrcode
 from PIL import Image
@@ -17,7 +17,7 @@ class AudioStreamerApp(ctk.CTk):
         super().__init__()
         
         self.title("AudioStreamer - PC Server (Wi-Fi & USB Cable)")
-        self.geometry("640x480")
+        self.geometry("640x500")
         
         self.streamer = AudioStreamer()
         self.network = NetworkManager(pc_name=socket.gethostname())
@@ -87,7 +87,7 @@ class AudioStreamerApp(ctk.CTk):
         self.volume_slider.pack(pady=10, padx=20, fill="x")
         
         self.mute_btn = ctk.CTkButton(self.right_frame, text="Mute", command=self.toggle_mute)
-        self.mute_btn.pack(pady=20)
+        self.mute_btn.pack(pady=15)
         self.is_muted = False
         
     def _usb_monitor_loop(self):
@@ -103,9 +103,12 @@ class AudioStreamerApp(ctk.CTk):
                         self.is_usb_active = True
                         self.after(0, lambda: self.on_usb_connected(dev))
                         
-                        # Wait while socket is alive
+                        # Start reader for media commands from iOS over USB
+                        cmd_thread = threading.Thread(target=self._usb_cmd_reader, args=(sock,), daemon=True)
+                        cmd_thread.start()
+                        
+                        # Monitor socket connection
                         while self.running and self.is_usb_active:
-                            # Test socket connection by checking streamer state
                             if self.streamer.tcp_sock is None:
                                 break
                             time.sleep(1.0)
@@ -114,10 +117,29 @@ class AudioStreamerApp(ctk.CTk):
                         self.streamer.set_tcp_socket(None)
                         self.after(0, self.on_usb_disconnected)
                     except Exception:
-                        pass # App on iOS might not be open yet
+                        pass
             except Exception:
                 pass
             time.sleep(1.5)
+
+    def _usb_cmd_reader(self, sock):
+        while self.is_usb_active and self.running:
+            try:
+                data = sock.recv(1024)
+                if not data:
+                    break
+                msg = data.decode('utf-8', errors='ignore').strip()
+                if msg == "CMD|PLAY_PAUSE":
+                    trigger_media_key(VK_MEDIA_PLAY_PAUSE)
+                elif msg == "CMD|NEXT":
+                    trigger_media_key(VK_MEDIA_NEXT_TRACK)
+                elif msg == "CMD|PREV":
+                    trigger_media_key(VK_MEDIA_PREV_TRACK)
+                elif msg == "DISCONNECT":
+                    self.is_usb_active = False
+                    break
+            except Exception:
+                break
 
     def get_all_ips(self):
         try:
@@ -152,7 +174,7 @@ class AudioStreamerApp(ctk.CTk):
         self.usb_badge.configure(text="⚡ USB Active: 0ms Latency Mode", text_color="#2ecc71")
         
     def on_usb_disconnected(self):
-        if not self.network.is_connected:
+        if not self.network.connected_device:
             self.status_label.configure(text="Waiting for device...", text_color="white")
             self.device_label.configure(text="Plug in USB cable or connect via Wi-Fi")
         self.usb_badge.configure(text="⚡ USB Cable: Ready (Auto-detect)", text_color="#3498db")

@@ -10,6 +10,7 @@ class NetworkListener: ObservableObject {
     @Published var targetIP: String? = nil
     
     private var discoveryConnection: NWConnection?
+    private var directConnection: NWConnection?
     private var discoveryTimer: Timer?
     private var pingTimer: Timer?
     
@@ -21,17 +22,16 @@ class NetworkListener: ObservableObject {
     }
     
     func startDiscovery() {
-        // We broadcast to 255.255.255.255 on port 5001
         let host = NWEndpoint.Host("255.255.255.255")
         let params = NWParameters.udp
         params.allowLocalEndpointReuse = true
         
         discoveryConnection = NWConnection(host: host, port: discoveryPort, using: params)
-        discoveryConnection?.stateUpdateHandler = { state in
+        discoveryConnection?.stateUpdateHandler = { [weak self] state in
             switch state {
             case .ready:
-                self.beginReceiving()
-                self.startDiscoveryTimer()
+                self?.beginReceiving()
+                self?.startDiscoveryTimer()
             default:
                 break
             }
@@ -78,10 +78,10 @@ class NetworkListener: ObservableObject {
         self.targetIP = ip
         self.discoveryTimer?.invalidate()
         
-        // Setup direct connection for PINGs
         let host = NWEndpoint.Host(ip)
         let params = NWParameters.udp
         let connection = NWConnection(host: host, port: discoveryPort, using: params)
+        self.directConnection = connection
         connection.start(queue: .global())
         
         self.sendUDP(message: "CONNECT|\(self.deviceName)", to: connection)
@@ -93,15 +93,41 @@ class NetworkListener: ObservableObject {
                 self.sendUDP(message: "PING", to: connection)
             }
         }
+    }
+    
+    func sendMediaCommand(_ cmd: String) {
+        let msg = "CMD|\(cmd)"
+        if AudioEngine.shared.isUSBConnected {
+            AudioEngine.shared.sendUSBCommand(msg)
+        } else if let conn = directConnection {
+            sendUDP(message: msg, to: conn)
+        }
+    }
+    
+    func disconnect() {
+        if AudioEngine.shared.isUSBConnected {
+            AudioEngine.shared.sendUSBCommand("DISCONNECT")
+        }
+        if let conn = directConnection {
+            sendUDP(message: "DISCONNECT", to: conn)
+            conn.cancel()
+            directConnection = nil
+        }
         
-        AudioEngine.shared.startListening()
+        pingTimer?.invalidate()
+        pingTimer = nil
+        
+        DispatchQueue.main.async {
+            self.isConnected = false
+            self.targetIP = nil
+            self.pcName = "Looking for PC..."
+            AudioEngine.shared.reset()
+            self.startDiscovery()
+        }
     }
     
     private func sendUDP(message: String, to connection: NWConnection?) {
         let data = message.data(using: .utf8)
-        connection?.send(content: data, completion: .contentProcessed({ error in
-            // Handle error if needed
-        }))
+        connection?.send(content: data, completion: .contentProcessed({ _ in }))
     }
-    
 }

@@ -6,6 +6,7 @@ struct MainView: View {
     
     @State private var volume: Float = 1.0
     @State private var isMuted: Bool = false
+    @State private var isPlaying: Bool = true
     
     @State private var manualIP: String = ""
     @State private var showingScanner: Bool = false
@@ -29,27 +30,52 @@ struct MainView: View {
         ZStack {
             Color.black.edgesIgnoringSafeArea(.all)
             
-            VStack(spacing: 25) {
-                Text("AudioStreamer")
-                    .font(.largeTitle)
-                    .fontWeight(.bold)
-                    .foregroundColor(.white)
-                    .padding(.top, 30)
-                
-                // Mode Selector
-                Picker("Connection Mode", selection: $connectionMode) {
-                    Text("Wi-Fi Mode").tag(0)
-                    Text("Direct USB Cable").tag(1)
+            VStack(spacing: 20) {
+                // Header Bar with Cancel / Disconnect button
+                HStack {
+                    Text("AudioStreamer")
+                        .font(.title2)
+                        .fontWeight(.bold)
+                        .foregroundColor(.white)
+                    
+                    Spacer()
+                    
+                    if isConnected {
+                        Button(action: {
+                            network.disconnect()
+                        }) {
+                            HStack(spacing: 4) {
+                                Image(systemName: "xmark.circle.fill")
+                                Text("Cancel")
+                            }
+                            .font(.subheadline)
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
+                            .background(Color.red.opacity(0.8))
+                            .cornerRadius(20)
+                        }
+                    }
                 }
-                .pickerStyle(SegmentedPickerStyle())
-                .padding(.horizontal, 30)
+                .padding(.horizontal, 24)
+                .padding(.top, 25)
+                
+                // Mode Selector (if not connected)
+                if !isConnected {
+                    Picker("Connection Mode", selection: $connectionMode) {
+                        Text("Wi-Fi Mode").tag(0)
+                        Text("Direct USB Cable").tag(1)
+                    }
+                    .pickerStyle(SegmentedPickerStyle())
+                    .padding(.horizontal, 24)
+                }
                 
                 // Status Card
-                VStack(spacing: 12) {
+                VStack(spacing: 10) {
                     HStack {
                         Circle()
                             .fill(isConnected ? Color.green : Color.orange)
-                            .frame(width: 14, height: 14)
+                            .frame(width: 12, height: 12)
                         
                         Text(statusTitle)
                             .font(.headline)
@@ -75,43 +101,40 @@ struct MainView: View {
                                 .foregroundColor(.green)
                         }
                         .font(.footnote)
-                        .padding(.top, 4)
                     }
                 }
                 .padding()
                 .frame(maxWidth: .infinity)
                 .background(Color(white: 0.15))
-                .cornerRadius(18)
+                .cornerRadius(16)
                 .padding(.horizontal, 20)
                 
-                // Mode Specific Info / Action
+                // Mode Specific Connection UI
                 if !isConnected {
                     if connectionMode == 1 {
-                        // Direct USB Info
-                        VStack(spacing: 10) {
+                        VStack(spacing: 8) {
                             Image(systemName: "cable.connector")
-                                .font(.system(size: 40))
+                                .font(.system(size: 36))
                                 .foregroundColor(.blue)
-                                .padding(.top, 10)
+                                .padding(.top, 6)
                             
                             Text("Direct USB Cable Mode")
                                 .font(.headline)
                                 .foregroundColor(.white)
                             
-                            Text("Plug your iPhone into your PC with a USB cable and launch the Desktop app. No Hotspot or Wi-Fi needed!")
+                            Text("Plug in your USB cable and open the Desktop app on your PC.")
                                 .font(.caption)
                                 .foregroundColor(.gray)
                                 .multilineTextAlignment(.center)
-                                .padding(.horizontal, 30)
+                                .padding(.horizontal, 20)
                         }
                         .padding()
                         .frame(maxWidth: .infinity)
                         .background(Color(white: 0.10))
-                        .cornerRadius(15)
-                        .padding(.horizontal, 25)
+                        .cornerRadius(14)
+                        .padding(.horizontal, 24)
                     } else {
-                        // Wi-Fi Connection UI
-                        VStack(spacing: 12) {
+                        VStack(spacing: 10) {
                             Text("Manual Wi-Fi Connection")
                                 .font(.subheadline)
                                 .foregroundColor(.gray)
@@ -126,13 +149,13 @@ struct MainView: View {
                                         network.connectToPC(ip: manualIP, name: "Manual PC")
                                     }
                                 }
-                                .padding(.horizontal, 15)
+                                .padding(.horizontal, 14)
                                 .padding(.vertical, 8)
                                 .background(Color.blue)
                                 .foregroundColor(.white)
                                 .cornerRadius(8)
                             }
-                            .padding(.horizontal, 30)
+                            .padding(.horizontal, 24)
                             
                             Button(action: {
                                 showingScanner = true
@@ -141,23 +164,74 @@ struct MainView: View {
                                     Image(systemName: "qrcode.viewfinder")
                                     Text("Scan QR Code")
                                 }
-                                .padding(.vertical, 10)
+                                .padding(.vertical, 9)
                                 .frame(maxWidth: .infinity)
                                 .background(Color.orange)
                                 .foregroundColor(.white)
                                 .cornerRadius(8)
-                                .padding(.horizontal, 30)
+                                .padding(.horizontal, 24)
                             }
                         }
                     }
                 }
                 
+                // Media Controls (Only: Previous, Play/Pause, Next)
+                if isConnected {
+                    VStack(spacing: 12) {
+                        Text("PC Media Controls")
+                            .font(.caption)
+                            .foregroundColor(.gray)
+                            .textCase(.uppercase)
+                        
+                        HStack(spacing: 35) {
+                            // Previous Track
+                            Button(action: {
+                                network.sendMediaCommand("PREV")
+                            }) {
+                                Image(systemName: "backward.fill")
+                                    .font(.title)
+                                    .foregroundColor(.white)
+                                    .frame(width: 50, height: 50)
+                                    .background(Color(white: 0.2))
+                                    .clipShape(Circle())
+                            }
+                            
+                            // Play / Pause (Pause / Resume)
+                            Button(action: {
+                                isPlaying.toggle()
+                                network.sendMediaCommand("PLAY_PAUSE")
+                            }) {
+                                Image(systemName: isPlaying ? "pause.fill" : "play.fill")
+                                    .font(.title)
+                                    .foregroundColor(.black)
+                                    .frame(width: 65, height: 65)
+                                    .background(Color.white)
+                                    .clipShape(Circle())
+                                    .shadow(color: .white.opacity(0.3), radius: 8)
+                            }
+                            
+                            // Next Track
+                            Button(action: {
+                                network.sendMediaCommand("NEXT")
+                            }) {
+                                Image(systemName: "forward.fill")
+                                    .font(.title)
+                                    .foregroundColor(.white)
+                                    .frame(width: 50, height: 50)
+                                    .background(Color(white: 0.2))
+                                    .clipShape(Circle())
+                            }
+                        }
+                        .padding(.vertical, 8)
+                    }
+                    .padding(.horizontal, 20)
+                }
+                
                 Spacer()
                 
-                // Controls
-                VStack(spacing: 30) {
-                    // Volume Slider
-                    VStack(spacing: 10) {
+                // Volume Controls
+                VStack(spacing: 20) {
+                    VStack(spacing: 8) {
                         HStack {
                             Image(systemName: "speaker.fill")
                                 .foregroundColor(.gray)
@@ -173,7 +247,7 @@ struct MainView: View {
                             Image(systemName: "speaker.wave.3.fill")
                                 .foregroundColor(.gray)
                         }
-                        .padding(.horizontal, 30)
+                        .padding(.horizontal, 28)
                     }
                     
                     // Mute / Unmute Button
@@ -183,14 +257,14 @@ struct MainView: View {
                     }) {
                         Image(systemName: isMuted ? "speaker.slash.circle.fill" : "speaker.wave.2.circle.fill")
                             .resizable()
-                            .frame(width: 70, height: 70)
+                            .frame(width: 64, height: 64)
                             .foregroundColor(isMuted ? .red : .blue)
                             .background(Color.white)
                             .clipShape(Circle())
-                            .shadow(radius: 10)
+                            .shadow(radius: 8)
                     }
                 }
-                .padding(.bottom, 50)
+                .padding(.bottom, 40)
             }
         }
         .preferredColorScheme(.dark)
