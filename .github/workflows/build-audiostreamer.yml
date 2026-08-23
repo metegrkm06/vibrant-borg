@@ -1,0 +1,64 @@
+name: Build AudioStreamer IPA
+
+on:
+  push:
+    paths:
+      - 'AudioStreamer/**'
+      - '.github/workflows/build-audiostreamer.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build Unsigned IPA
+    runs-on: macos-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Show Xcode Version
+        run: xcodebuild -version
+
+      - name: Generate Xcode Project (no XcodeGen needed)
+        run: cd AudioStreamer && python3 generate_project.py
+
+      - name: Build App
+        run: |
+          cd AudioStreamer
+          xcodebuild clean build \
+            -project AudioStreamerApp.xcodeproj \
+            -scheme AudioStreamerApp \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath "$RUNNER_TEMP/build" \
+            CODE_SIGNING_ALLOWED=YES \
+            CODE_SIGNING_REQUIRED=YES \
+            CODE_SIGN_IDENTITY="-" \
+            AD_HOC_CODE_SIGNING_ALLOWED=YES \
+            ONLY_ACTIVE_ARCH=NO | tee build.log
+            
+      - name: Upload build log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: build.log
+
+      - name: Package IPA
+        run: |
+          APP_PATH=$(find "$RUNNER_TEMP/build" -name "AudioStreamerApp.app" -type d | head -1)
+          echo "App: $APP_PATH"
+          mkdir -p Payload
+          cp -a "$APP_PATH" Payload/
+          chmod +x Payload/AudioStreamerApp.app/AudioStreamerApp
+          zip -r -y AudioStreamerApp.ipa Payload
+          ls -lh AudioStreamerApp.ipa
+
+      - name: Upload IPA Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AudioStreamerApp-ipa
+          path: AudioStreamerApp.ipa
+          retention-days: 30
