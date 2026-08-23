@@ -28,21 +28,21 @@ final class SampleRingBuffer {
         }
     }
 
-    // fills `outL` and `outR` with `needed` floats
+    // fills `intoL` and `intoR` with `needed` floats
     @discardableResult
     func pull(intoL: UnsafeMutablePointer<Float>, intoR: UnsafeMutablePointer<Float>, count needed: Int) -> Bool {
         lock.lock(); defer { lock.unlock() }
         let have = min(needed, count / 2)
         for i in 0..<have {
-            outL[i] = buf[readPos]
-            outR[i] = buf[(readPos + 1) % cap]
+            intoL[i] = buf[readPos]
+            intoR[i] = buf[(readPos + 1) % cap]
             readPos = (readPos + 2) % cap
         }
         count -= (have * 2)
         if have < needed {
             // underrun: fill rest with silence
-            memset(outL + have, 0, (needed - have) * MemoryLayout<Float>.stride)
-            memset(outR + have, 0, (needed - have) * MemoryLayout<Float>.stride)
+            memset(intoL + have, 0, (needed - have) * MemoryLayout<Float>.stride)
+            memset(intoR + have, 0, (needed - have) * MemoryLayout<Float>.stride)
             return false
         }
         return true
