@@ -36,5 +36,7 @@
     </array>
     <key>NSLocalNetworkUsageDescription</key>
     <string>AudioStreamer needs to discover your PC on the local network.</string>
+    <key>NSCameraUsageDescription</key>
+    <string>AudioStreamer needs camera access to scan the QR code to connect to the PC.</string>
 </dict>
 </plist>

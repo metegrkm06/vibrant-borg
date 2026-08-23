@@ -70,7 +70,7 @@ class NetworkListener: ObservableObject {
         }
     }
     
-    private func connectToPC(ip: String, name: String) {
+    func connectToPC(ip: String, name: String) {
         guard !isConnected else { return }
         
         self.isConnected = true

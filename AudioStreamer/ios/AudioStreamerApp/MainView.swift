@@ -7,6 +7,9 @@ struct MainView: View {
     @State private var volume: Float = 1.0
     @State private var isMuted: Bool = false
     
+    @State private var manualIP: String = ""
+    @State private var showingScanner: Bool = false
+    
     var body: some View {
         ZStack {
             Color.black.edgesIgnoringSafeArea(.all)
@@ -52,6 +55,48 @@ struct MainView: View {
                 .cornerRadius(20)
                 .padding(.horizontal, 20)
                 
+                // Manual Connection UI
+                if !network.isConnected {
+                    VStack(spacing: 15) {
+                        Text("Or connect manually:")
+                            .font(.subheadline)
+                            .foregroundColor(.gray)
+                        
+                        HStack {
+                            TextField("192.168.X.X", text: $manualIP)
+                                .textFieldStyle(RoundedBorderTextFieldStyle())
+                                .keyboardType(.decimalPad)
+                            
+                            Button("Connect") {
+                                if !manualIP.isEmpty {
+                                    network.connectToPC(ip: manualIP, name: "Manual PC")
+                                }
+                            }
+                            .padding(.horizontal, 15)
+                            .padding(.vertical, 8)
+                            .background(Color.blue)
+                            .foregroundColor(.white)
+                            .cornerRadius(8)
+                        }
+                        .padding(.horizontal, 40)
+                        
+                        Button(action: {
+                            showingScanner = true
+                        }) {
+                            HStack {
+                                Image(systemName: "qrcode.viewfinder")
+                                Text("Scan QR Code")
+                            }
+                            .padding()
+                            .frame(maxWidth: .infinity)
+                            .background(Color.orange)
+                            .foregroundColor(.white)
+                            .cornerRadius(8)
+                            .padding(.horizontal, 40)
+                        }
+                    }
+                }
+                
                 Spacer()
                 
                 // Controls
@@ -94,5 +139,16 @@ struct MainView: View {
             }
         }
         .preferredColorScheme(.dark)
+        .sheet(isPresented: $showingScanner) {
+            ScannerView { code in
+                showingScanner = false
+                var ip = code
+                if code.hasPrefix("audiostreamer://") {
+                    ip = code.replacingOccurrences(of: "audiostreamer://", with: "")
+                }
+                network.connectToPC(ip: ip, name: "QR Connection")
+            }
+            .edgesIgnoringSafeArea(.all)
+        }
     }
 }
