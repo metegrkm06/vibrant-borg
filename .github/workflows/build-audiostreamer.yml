@@ -27,6 +27,7 @@ jobs:
       - name: Build App
         run: |
           cd AudioStreamer
+          set -o pipefail
           xcodebuild clean build \
             -project AudioStreamerApp.xcodeproj \
             -scheme AudioStreamerApp \
@@ -37,7 +38,7 @@ jobs:
             CODE_SIGNING_REQUIRED=YES \
             CODE_SIGN_IDENTITY="-" \
             AD_HOC_CODE_SIGNING_ALLOWED=YES \
-            ONLY_ACTIVE_ARCH=NO | tee build.log
+            ONLY_ACTIVE_ARCH=NO
             
       - name: Upload build log
         if: failure()
