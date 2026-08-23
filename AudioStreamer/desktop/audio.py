@@ -31,12 +31,16 @@ class AudioStreamer:
     def __init__(self):
         self.encoder = OpusEncoder(48000, 2)
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.tcp_sock = None
         self.is_streaming = False
         self.target_ip = None
         self.target_port = 5000
         self.volume = 1.0
         self.mic = None
         self._thread = None
+        
+    def set_tcp_socket(self, sock):
+        self.tcp_sock = sock
         
         # Audio specs
         self.sample_rate = 48000
@@ -88,17 +92,26 @@ class AudioStreamer:
                     data = np.clip(data, -1.0, 1.0)
                     data_int16 = (data * 32767).astype(np.int16)
                     
-                    if self.target_ip:
-                        # Packet format: Sequence(4 bytes), Timestamp(8 bytes), PCMData(3840 bytes)
+                    if self.target_ip or self.tcp_sock:
+                        # Packet format: Sequence(4 bytes), Timestamp(8 bytes), PCMData(1920 bytes)
                         ts = time.time_ns()
                         header = struct.pack("!IQ", seq, ts)
                         packet = header + data_int16.tobytes()
                         
-                        try:
-                            self.sock.sendto(packet, (self.target_ip, self.target_port))
-                        except Exception as e:
-                            pass # Ignore socket errors on send
-                            
+                        if self.target_ip:
+                            try:
+                                self.sock.sendto(packet, (self.target_ip, self.target_port))
+                            except Exception:
+                                pass
+                                
+                        if self.tcp_sock:
+                            try:
+                                # Length prefix for TCP framing
+                                framed = struct.pack("!I", len(packet)) + packet
+                                self.tcp_sock.sendall(framed)
+                            except Exception:
+                                self.tcp_sock = None # Disconnected
+                                
                     seq += 1
         except Exception as e:
             print(f"Stream error: {e}")

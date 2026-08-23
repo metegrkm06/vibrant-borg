@@ -9,115 +9,145 @@ struct MainView: View {
     
     @State private var manualIP: String = ""
     @State private var showingScanner: Bool = false
+    @State private var connectionMode: Int = 0 // 0 = Wi-Fi, 1 = Direct USB Cable
     
-    @State private var connectionMode: Int = 0 // 0 = WiFi, 1 = USB
+    var isConnected: Bool {
+        network.isConnected || audio.isUSBConnected
+    }
+    
+    var statusTitle: String {
+        if audio.isUSBConnected {
+            return "Connected via USB Cable (0ms)"
+        } else if network.isConnected {
+            return "Connected via Wi-Fi"
+        } else {
+            return connectionMode == 1 ? "Waiting for USB Cable..." : "Searching on Wi-Fi..."
+        }
+    }
     
     var body: some View {
         ZStack {
             Color.black.edgesIgnoringSafeArea(.all)
             
-            VStack(spacing: 30) {
+            VStack(spacing: 25) {
                 Text("AudioStreamer")
                     .font(.largeTitle)
                     .fontWeight(.bold)
                     .foregroundColor(.white)
-                    .padding(.top, 40)
+                    .padding(.top, 30)
                 
+                // Mode Selector
                 Picker("Connection Mode", selection: $connectionMode) {
-                    Text("Wi-Fi").tag(0)
-                    Text("USB").tag(1)
+                    Text("Wi-Fi Mode").tag(0)
+                    Text("Direct USB Cable").tag(1)
                 }
                 .pickerStyle(SegmentedPickerStyle())
-                .padding(.horizontal, 40)
-                .onChange(of: connectionMode) { newValue in
-                    if newValue == 1 {
-                        // Standard Windows IP when tethered to iPhone
-                        manualIP = "172.20.10.2"
-                    } else {
-                        manualIP = ""
-                    }
-                }
-                
-                if connectionMode == 1 {
-                    Text("Turn on 'Personal Hotspot' and plug in via USB. Then connect below.")
-                        .font(.footnote)
-                        .foregroundColor(.gray)
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal, 30)
-                }
+                .padding(.horizontal, 30)
                 
                 // Status Card
-                VStack(spacing: 15) {
+                VStack(spacing: 12) {
                     HStack {
                         Circle()
-                            .fill(network.isConnected ? Color.green : Color.orange)
-                            .frame(width: 15, height: 15)
+                            .fill(isConnected ? Color.green : Color.orange)
+                            .frame(width: 14, height: 14)
                         
-                        Text(network.isConnected ? "Connected" : "Searching...")
+                        Text(statusTitle)
                             .font(.headline)
                             .foregroundColor(.white)
                     }
                     
-                    Text(network.pcName)
-                        .font(.subheadline)
-                        .foregroundColor(.gray)
+                    if audio.isUSBConnected {
+                        Text("Direct Hardware Stream • No Network Delay")
+                            .font(.subheadline)
+                            .foregroundColor(.green)
+                    } else if network.isConnected {
+                        Text(network.pcName)
+                            .font(.subheadline)
+                            .foregroundColor(.gray)
+                    }
                     
-                    if network.isConnected {
+                    if isConnected {
                         HStack {
-                            Text("Estimated Latency:")
+                            Text("Latency:")
                                 .foregroundColor(.gray)
-                            Text("\(audio.latencyMs) ms")
+                            Text(audio.isUSBConnected ? "< 5 ms" : "\(audio.latencyMs) ms")
                                 .fontWeight(.bold)
-                                .foregroundColor(audio.latencyMs < 30 ? .green : .yellow)
+                                .foregroundColor(.green)
                         }
                         .font(.footnote)
-                        .padding(.top, 10)
+                        .padding(.top, 4)
                     }
                 }
                 .padding()
                 .frame(maxWidth: .infinity)
                 .background(Color(white: 0.15))
-                .cornerRadius(20)
+                .cornerRadius(18)
                 .padding(.horizontal, 20)
                 
-                // Manual Connection UI
-                if !network.isConnected {
-                    VStack(spacing: 15) {
-                        Text("Or connect manually:")
-                            .font(.subheadline)
-                            .foregroundColor(.gray)
-                        
-                        HStack {
-                            TextField("192.168.X.X", text: $manualIP)
-                                .textFieldStyle(RoundedBorderTextFieldStyle())
-                                .keyboardType(.decimalPad)
+                // Mode Specific Info / Action
+                if !isConnected {
+                    if connectionMode == 1 {
+                        // Direct USB Info
+                        VStack(spacing: 10) {
+                            Image(systemName: "cable.connector")
+                                .font(.system(size: 40))
+                                .foregroundColor(.blue)
+                                .padding(.top, 10)
                             
-                            Button("Connect") {
-                                if !manualIP.isEmpty {
-                                    network.connectToPC(ip: manualIP, name: "Manual PC")
-                                }
-                            }
-                            .padding(.horizontal, 15)
-                            .padding(.vertical, 8)
-                            .background(Color.blue)
-                            .foregroundColor(.white)
-                            .cornerRadius(8)
+                            Text("Direct USB Cable Mode")
+                                .font(.headline)
+                                .foregroundColor(.white)
+                            
+                            Text("Plug your iPhone into your PC with a USB cable and launch the Desktop app. No Hotspot or Wi-Fi needed!")
+                                .font(.caption)
+                                .foregroundColor(.gray)
+                                .multilineTextAlignment(.center)
+                                .padding(.horizontal, 30)
                         }
-                        .padding(.horizontal, 40)
-                        
-                        Button(action: {
-                            showingScanner = true
-                        }) {
+                        .padding()
+                        .frame(maxWidth: .infinity)
+                        .background(Color(white: 0.10))
+                        .cornerRadius(15)
+                        .padding(.horizontal, 25)
+                    } else {
+                        // Wi-Fi Connection UI
+                        VStack(spacing: 12) {
+                            Text("Manual Wi-Fi Connection")
+                                .font(.subheadline)
+                                .foregroundColor(.gray)
+                            
                             HStack {
-                                Image(systemName: "qrcode.viewfinder")
-                                Text("Scan QR Code")
+                                TextField("192.168.X.X", text: $manualIP)
+                                    .textFieldStyle(RoundedBorderTextFieldStyle())
+                                    .keyboardType(.decimalPad)
+                                
+                                Button("Connect") {
+                                    if !manualIP.isEmpty {
+                                        network.connectToPC(ip: manualIP, name: "Manual PC")
+                                    }
+                                }
+                                .padding(.horizontal, 15)
+                                .padding(.vertical, 8)
+                                .background(Color.blue)
+                                .foregroundColor(.white)
+                                .cornerRadius(8)
                             }
-                            .padding()
-                            .frame(maxWidth: .infinity)
-                            .background(Color.orange)
-                            .foregroundColor(.white)
-                            .cornerRadius(8)
-                            .padding(.horizontal, 40)
+                            .padding(.horizontal, 30)
+                            
+                            Button(action: {
+                                showingScanner = true
+                            }) {
+                                HStack {
+                                    Image(systemName: "qrcode.viewfinder")
+                                    Text("Scan QR Code")
+                                }
+                                .padding(.vertical, 10)
+                                .frame(maxWidth: .infinity)
+                                .background(Color.orange)
+                                .foregroundColor(.white)
+                                .cornerRadius(8)
+                                .padding(.horizontal, 30)
+                            }
                         }
                     }
                 }
@@ -125,9 +155,9 @@ struct MainView: View {
                 Spacer()
                 
                 // Controls
-                VStack(spacing: 40) {
-                    // Volume
-                    VStack(spacing: 15) {
+                VStack(spacing: 30) {
+                    // Volume Slider
+                    VStack(spacing: 10) {
                         HStack {
                             Image(systemName: "speaker.fill")
                                 .foregroundColor(.gray)
@@ -146,21 +176,21 @@ struct MainView: View {
                         .padding(.horizontal, 30)
                     }
                     
-                    // Mute Button
+                    // Mute / Unmute Button
                     Button(action: {
                         isMuted.toggle()
                         audio.setVolume(isMuted ? 0.0 : volume)
                     }) {
                         Image(systemName: isMuted ? "speaker.slash.circle.fill" : "speaker.wave.2.circle.fill")
                             .resizable()
-                            .frame(width: 80, height: 80)
+                            .frame(width: 70, height: 70)
                             .foregroundColor(isMuted ? .red : .blue)
                             .background(Color.white)
                             .clipShape(Circle())
                             .shadow(radius: 10)
                     }
                 }
-                .padding(.bottom, 60)
+                .padding(.bottom, 50)
             }
         }
         .preferredColorScheme(.dark)
