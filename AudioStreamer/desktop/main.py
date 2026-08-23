@@ -44,16 +44,16 @@ class AudioStreamerApp(ctk.CTk):
         self.device_label = ctk.CTkLabel(self.left_frame, text="No device connected", text_color="gray")
         self.device_label.pack(pady=5)
         
-        # QR Code for manual pairing (IP address)
-        ip_addr = self.get_local_ip()
-        qr = qrcode.make(f"audiostreamer://{ip_addr}")
-        qr.save("qr.png")
-        self.qr_image = ctk.CTkImage(light_image=Image.open("qr.png"), size=(150, 150))
-        self.qr_label = ctk.CTkLabel(self.left_frame, image=self.qr_image, text="")
-        self.qr_label.pack(pady=20)
+        # IP Selection & QR Code
+        self.ips = self.get_all_ips()
+        self.ip_var = ctk.StringVar(value=self.ips[0] if self.ips else "127.0.0.1")
         
-        self.ip_label = ctk.CTkLabel(self.left_frame, text=f"IP: {ip_addr}")
-        self.ip_label.pack(pady=5)
+        self.ip_menu = ctk.CTkOptionMenu(self.left_frame, values=self.ips, variable=self.ip_var, command=self.update_qr)
+        self.ip_menu.pack(pady=5)
+        
+        self.qr_label = ctk.CTkLabel(self.left_frame, text="")
+        self.qr_label.pack(pady=10)
+        self.update_qr(self.ip_var.get())
         
         # Right Panel (Controls)
         self.right_frame = ctk.CTkFrame(self)
@@ -76,6 +76,16 @@ class AudioStreamerApp(ctk.CTk):
         self.mute_btn.pack(pady=20)
         self.is_muted = False
         
+    def get_all_ips(self):
+        try:
+            _, _, ips = socket.gethostbyname_ex(socket.gethostname())
+            valid_ips = [ip for ip in ips if not ip.startswith("127.")]
+            if not valid_ips:
+                valid_ips = [self.get_local_ip()]
+            return valid_ips
+        except:
+            return [self.get_local_ip()]
+            
     def get_local_ip(self):
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         try:
@@ -86,6 +96,12 @@ class AudioStreamerApp(ctk.CTk):
         finally:
             s.close()
         return IP
+        
+    def update_qr(self, ip_addr):
+        qr = qrcode.make(f"audiostreamer://{ip_addr}")
+        qr.save("qr.png")
+        self.qr_image = ctk.CTkImage(light_image=Image.open("qr.png"), size=(150, 150))
+        self.qr_label.configure(image=self.qr_image)
         
     def on_device_connected(self, ip, name):
         self.status_label.configure(text="Streaming Live", text_color="green")

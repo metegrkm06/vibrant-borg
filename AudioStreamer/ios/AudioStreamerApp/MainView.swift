@@ -10,6 +10,8 @@ struct MainView: View {
     @State private var manualIP: String = ""
     @State private var showingScanner: Bool = false
     
+    @State private var connectionMode: Int = 0 // 0 = WiFi, 1 = USB
+    
     var body: some View {
         ZStack {
             Color.black.edgesIgnoringSafeArea(.all)
@@ -20,6 +22,29 @@ struct MainView: View {
                     .fontWeight(.bold)
                     .foregroundColor(.white)
                     .padding(.top, 40)
+                
+                Picker("Connection Mode", selection: $connectionMode) {
+                    Text("Wi-Fi").tag(0)
+                    Text("USB").tag(1)
+                }
+                .pickerStyle(SegmentedPickerStyle())
+                .padding(.horizontal, 40)
+                .onChange(of: connectionMode) { newValue in
+                    if newValue == 1 {
+                        // Standard Windows IP when tethered to iPhone
+                        manualIP = "172.20.10.2"
+                    } else {
+                        manualIP = ""
+                    }
+                }
+                
+                if connectionMode == 1 {
+                    Text("Turn on 'Personal Hotspot' and plug in via USB. Then connect below.")
+                        .font(.footnote)
+                        .foregroundColor(.gray)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 30)
+                }
                 
                 // Status Card
                 VStack(spacing: 15) {

@@ -23,6 +23,20 @@ class AudioEngine: ObservableObject {
     init() {
         converter = AVAudioConverter(from: audioFormat, to: floatFormat)!
         setupEngine()
+        
+        NotificationCenter.default.addObserver(self, selector: #selector(handleConfigurationChange), name: .AVAudioEngineConfigurationChange, object: engine)
+    }
+    
+    @objc private func handleConfigurationChange(notification: Notification) {
+        do {
+            engine.prepare()
+            try engine.start()
+            if !player.isPlaying {
+                player.play()
+            }
+        } catch {
+            print("Failed to restart engine after configuration change: \(error)")
+        }
     }
     
     private func setupEngine() {
