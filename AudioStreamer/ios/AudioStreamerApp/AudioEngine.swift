@@ -2,180 +2,162 @@ import Foundation
 import Network
 import AVFoundation
 
-// ─────────────────────────────────────────────────────────────────────────────
-// MARK: - Lock-free ring buffer for audio frames
-// ─────────────────────────────────────────────────────────────────────────────
-final class PCMRingBuffer {
-    private let capacity: Int
-    private var buffer: [UnsafeMutableRawPointer?]
-    private var lengths: [Int]
-    private var writeIndex: Int = 0
-    private var readIndex: Int = 0
-    private var count: Int = 0
+// ─── Circular sample buffer (thread-safe, Float32 interleaved stereo) ───────
+final class SampleRingBuffer {
+    private var buf: [Float]
+    private let cap: Int
+    private var writePos: Int = 0
+    private var readPos: Int  = 0
+    private var count: Int    = 0
     private let lock = NSLock()
 
-    init(capacity: Int = 64) {
-        self.capacity = capacity
-        self.buffer = Array(repeating: nil, count: capacity)
-        self.lengths = Array(repeating: 0, count: capacity)
+    init(seconds: Double = 0.5, sampleRate: Int = 48000, channels: Int = 2) {
+        cap = Int(Double(sampleRate) * seconds) * channels
+        buf = Array(repeating: 0, count: cap)
     }
 
-    deinit {
-        for ptr in buffer { if let p = ptr { free(p) } }
-    }
+    var available: Int { lock.lock(); defer { lock.unlock() }; return count }
 
-    func push(_ data: Data) {
+    func push(_ samples: [Float]) {
         lock.lock(); defer { lock.unlock() }
-        // Drop oldest if full
-        if count == capacity {
-            if let old = buffer[readIndex] { free(old) }
-            buffer[readIndex] = nil
-            readIndex = (readIndex + 1) % capacity
-            count -= 1
+        for s in samples {
+            buf[writePos] = s
+            writePos = (writePos + 1) % cap
+            if count < cap { count += 1 }
+            else { readPos = (readPos + 1) % cap } // overwrite oldest
         }
-        let byteCount = data.count
-        let ptr = malloc(byteCount)!
-        data.withUnsafeBytes { memcpy(ptr, $0.baseAddress!, byteCount) }
-        buffer[writeIndex] = ptr
-        lengths[writeIndex] = byteCount
-        writeIndex = (writeIndex + 1) % capacity
-        count += 1
     }
 
-    func pop() -> Data? {
+    // fills `out` with `needed` floats; returns true if fully satisfied
+    @discardableResult
+    func pull(into out: UnsafeMutablePointer<Float>, count needed: Int) -> Bool {
         lock.lock(); defer { lock.unlock() }
-        guard count > 0, let ptr = buffer[readIndex] else { return nil }
-        let byteCount = lengths[readIndex]
-        let data = Data(bytes: ptr, count: byteCount)
-        free(ptr)
-        buffer[readIndex] = nil
-        readIndex = (readIndex + 1) % capacity
-        count -= 1
-        return data
-    }
-
-    var available: Int {
-        lock.lock(); defer { lock.unlock() }
-        return count
+        let have = min(needed, count)
+        for i in 0..<have {
+            out[i] = buf[readPos]
+            readPos = (readPos + 1) % cap
+        }
+        count -= have
+        if have < needed {
+            // underrun: fill rest with silence
+            memset(out + have, 0, (needed - have) * MemoryLayout<Float>.stride)
+            return false
+        }
+        return true
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// MARK: - AudioEngine
-// ─────────────────────────────────────────────────────────────────────────────
+// ─── AudioEngine ─────────────────────────────────────────────────────────────
 class AudioEngine: ObservableObject {
     static let shared = AudioEngine()
 
     @Published var latencyMs: Int = 0
     @Published var isUSBConnected: Bool = false
 
-    private let engine = AVAudioEngine()
-    private let player = AVAudioPlayerNode()
-    private let mixer = AVAudioMixerNode()
+    private let engine      = AVAudioEngine()
+    private var sourceNode: AVAudioSourceNode?
 
     private var udpListener: NWListener?
     private var tcpListener: NWListener?
     private var activeTCPConnection: NWConnection?
 
-    // 48 kHz stereo Float32 non-interleaved
-    private let floatFormat = AVAudioFormat(
+    private let sampleRate: Double = 48000
+    private let channels:   Int    = 2
+    private let format = AVAudioFormat(
         commonFormat: .pcmFormatFloat32,
-        sampleRate: 48000, channels: 2, interleaved: false)!
+        sampleRate: 48000, channels: 2, interleaved: true)!
 
-    private let ringBuffer = PCMRingBuffer(capacity: 128)
-
-    // Separate high-priority audio render thread
-    private var renderThread: Thread?
-    private var renderRunning = false
-
-    // Pre-allocate one AVAudioPCMBuffer that we reuse each frame
-    private let frameCapacity: AVAudioFrameCount = 480   // 10 ms @ 48kHz
-    private var renderBuffer: AVAudioPCMBuffer!
-
-    // Soft-silence buffer for underrun concealment
-    private var silenceBuffer: AVAudioPCMBuffer!
+    private let ring = SampleRingBuffer(seconds: 0.15) // 150ms max buffer
+    private var frameCounter = 0
 
     init() {
-        renderBuffer = AVAudioPCMBuffer(pcmFormat: floatFormat, frameCapacity: frameCapacity)!
-        silenceBuffer = AVAudioPCMBuffer(pcmFormat: floatFormat, frameCapacity: frameCapacity)!
-        silenceBuffer.frameLength = frameCapacity
-        // zero-fill silence
-        for ch in 0..<2 {
-            memset(silenceBuffer.floatChannelData![ch], 0, Int(frameCapacity) * MemoryLayout<Float>.stride)
-        }
-
-        setupAudioSession()
+        setupSession()
         setupEngine()
 
-        NotificationCenter.default.addObserver(
-            self, selector: #selector(handleEngineChange),
+        NotificationCenter.default.addObserver(self, selector: #selector(handleEngineChange),
             name: .AVAudioEngineConfigurationChange, object: engine)
-        NotificationCenter.default.addObserver(
-            self, selector: #selector(handleRouteChange),
+        NotificationCenter.default.addObserver(self, selector: #selector(handleRouteChange),
             name: AVAudioSession.routeChangeNotification, object: nil)
 
         startListeners()
-        startRenderThread()
     }
 
-    // MARK: Setup
+    // MARK: - Session
 
-    private func setupAudioSession() {
+    private func setupSession() {
         do {
             let s = AVAudioSession.sharedInstance()
-            // .playback + allowBluetoothA2DP for BT speakers/AirPods
             try s.setCategory(.playback, mode: .default,
-                               options: [.allowBluetoothA2DP, .allowAirPlay])
-            // Smallest possible hardware I/O buffer = lowest latency
-            try s.setPreferredIOBufferDuration(0.005)   // 5 ms
+                              options: [.allowBluetoothA2DP, .allowAirPlay])
+            try s.setPreferredIOBufferDuration(0.005)
             try s.setActive(true)
-        } catch { print("AudioSession error: \(error)") }
+        } catch { print("Session error: \(error)") }
     }
+
+    // MARK: - Engine (pull-based via AVAudioSourceNode)
 
     private func setupEngine() {
-        engine.attach(player)
-        engine.connect(player, to: engine.mainMixerNode, format: floatFormat)
-        do {
-            try engine.start()
-            player.play()
-        } catch { print("Engine start error: \(error)") }
+        // AVAudioSourceNode calls this render block whenever the engine needs audio.
+        // No scheduling, no queue — just pull from the ring buffer RIGHT NOW.
+        let node = AVAudioSourceNode(format: format) { [weak self] _, _, frameCount, abl -> OSStatus in
+            guard let self else { return noErr }
+            let needed = Int(frameCount) * self.channels
+            // abl has one buffer (interleaved stereo Float32)
+            if let ptr = abl.pointee.mBuffers.mData?.assumingMemoryBound(to: Float.self) {
+                self.ring.pull(into: ptr, count: needed)
+            }
+            // Update latency display every ~200 render calls
+            self.frameCounter += 1
+            if self.frameCounter % 200 == 0 {
+                let ms = (self.ring.available / self.channels) * 1000 / Int(self.sampleRate)
+                DispatchQueue.main.async { self.latencyMs = ms }
+            }
+            return noErr
+        }
+        sourceNode = node
+        engine.attach(node)
+        engine.connect(node, to: engine.mainMixerNode, format: format)
+        do { try engine.start() } catch { print("Engine start error: \(error)") }
     }
 
-    // MARK: Listeners
+    // MARK: - Packet ingestion
+
+    private func ingestPacket(_ data: Data) {
+        // Header: Seq(4) + Timestamp(8) = 12 bytes, rest is Int16 interleaved stereo PCM
+        guard data.count > 12 else { return }
+        let pcm = data.dropFirst(12)
+        let numSamples = pcm.count / 2 // each Int16 = 1 sample
+
+        var floats = [Float](repeating: 0, count: numSamples)
+        pcm.withUnsafeBytes { raw in
+            guard let p = raw.bindMemory(to: Int16.self).baseAddress else { return }
+            for i in 0..<numSamples {
+                floats[i] = Float(p[i]) / 32768.0
+            }
+        }
+        ring.push(floats)
+    }
+
+    // MARK: - Listeners
 
     private func startListeners() {
-        startUDPListener()
-        startTCPListener()
-    }
-
-    private func startUDPListener() {
-        guard udpListener == nil else { return }
-        let params = NWParameters.udp
-        params.allowLocalEndpointReuse = true
-        do {
-            udpListener = try NWListener(using: params, on: 5000)
-            udpListener?.newConnectionHandler = { [weak self] conn in
+        // UDP (Wi-Fi)
+        let udpParams = NWParameters.udp
+        udpParams.allowLocalEndpointReuse = true
+        if let l = try? NWListener(using: udpParams, on: 5000) {
+            l.newConnectionHandler = { [weak self] conn in
                 conn.start(queue: .global(qos: .userInteractive))
-                self?.receiveUDP(conn)
+                self?.recvUDP(conn)
             }
-            udpListener?.start(queue: .global(qos: .userInteractive))
-        } catch { print("UDP listen error: \(error)") }
-    }
-
-    private func receiveUDP(_ conn: NWConnection) {
-        conn.receiveMessage { [weak self] data, _, _, error in
-            if let data, data.count > 12 { self?.enqueueRaw(data) }
-            if error == nil { self?.receiveUDP(conn) }
+            l.start(queue: .global(qos: .userInteractive))
+            udpListener = l
         }
-    }
 
-    private func startTCPListener() {
-        guard tcpListener == nil else { return }
-        let params = NWParameters.tcp
-        params.allowLocalEndpointReuse = true
-        do {
-            tcpListener = try NWListener(using: params, on: 5002)
-            tcpListener?.newConnectionHandler = { [weak self] conn in
+        // TCP (USB cable)
+        let tcpParams = NWParameters.tcp
+        tcpParams.allowLocalEndpointReuse = true
+        if let l = try? NWListener(using: tcpParams, on: 5002) {
+            l.newConnectionHandler = { [weak self] conn in
                 self?.activeTCPConnection = conn
                 conn.start(queue: .global(qos: .userInteractive))
                 DispatchQueue.main.async {
@@ -183,15 +165,23 @@ class AudioEngine: ObservableObject {
                     NetworkListener.shared.isConnected = true
                     NetworkListener.shared.pcName = "PC (Direct USB Cable)"
                 }
-                self?.readTCPLength(conn)
+                self?.recvTCPLength(conn)
             }
-            tcpListener?.start(queue: .global(qos: .userInteractive))
-        } catch { print("TCP listen error: \(error)") }
+            l.start(queue: .global(qos: .userInteractive))
+            tcpListener = l
+        }
     }
 
-    private func readTCPLength(_ conn: NWConnection) {
-        conn.receive(minimumIncompleteLength: 4, maximumLength: 4) { [weak self] data, _, _, error in
-            guard let self, let data, data.count == 4, error == nil else {
+    private func recvUDP(_ conn: NWConnection) {
+        conn.receiveMessage { [weak self] data, _, _, err in
+            if let data { self?.ingestPacket(data) }
+            if err == nil { self?.recvUDP(conn) }
+        }
+    }
+
+    private func recvTCPLength(_ conn: NWConnection) {
+        conn.receive(minimumIncompleteLength: 4, maximumLength: 4) { [weak self] data, _, _, err in
+            guard let self, let data, data.count == 4, err == nil else {
                 DispatchQueue.main.async {
                     self?.isUSBConnected = false
                     self?.activeTCPConnection = nil
@@ -199,145 +189,53 @@ class AudioEngine: ObservableObject {
                 return
             }
             let len = Int(data.withUnsafeBytes { $0.load(as: UInt32.self).bigEndian })
-            guard len > 12, len < 65536 else { self.readTCPLength(conn); return }
-            self.readTCPBody(conn, remaining: len, accumulated: Data())
+            guard len > 12, len < 65536 else { self.recvTCPLength(conn); return }
+            self.recvTCPBody(conn, remaining: len, acc: Data())
         }
     }
 
-    private func readTCPBody(_ conn: NWConnection, remaining: Int, accumulated: Data) {
-        conn.receive(minimumIncompleteLength: 1, maximumLength: remaining) { [weak self] data, _, _, error in
-            guard let self, let data, error == nil else { return }
-            var acc = accumulated
-            acc.append(data)
-            if acc.count >= remaining {
-                if acc.count > 12 { self.enqueueRaw(acc) }
-                self.readTCPLength(conn)
+    private func recvTCPBody(_ conn: NWConnection, remaining: Int, acc: Data) {
+        conn.receive(minimumIncompleteLength: 1, maximumLength: remaining) { [weak self] data, _, _, err in
+            guard let self, let data, err == nil else { return }
+            var newAcc = acc; newAcc.append(data)
+            if newAcc.count >= remaining {
+                self.ingestPacket(newAcc)
+                self.recvTCPLength(conn)
             } else {
-                self.readTCPBody(conn, remaining: remaining - data.count, accumulated: acc)
+                self.recvTCPBody(conn, remaining: remaining - data.count, acc: newAcc)
             }
         }
     }
 
-    // MARK: Packet → Ring Buffer
-
-    private func enqueueRaw(_ data: Data) {
-        // Strip 12-byte header, push raw PCM Int16 interleaved
-        let pcm = data.dropFirst(12)
-        guard !pcm.isEmpty else { return }
-
-        // Drop excess if ring buffer getting full (network burst protection)
-        if ringBuffer.available > 48 {
-            _ = ringBuffer.pop()
-        }
-        ringBuffer.push(Data(pcm))
-    }
-
-    // MARK: High-Priority Render Thread
-
-    private func startRenderThread() {
-        renderRunning = true
-        renderThread = Thread {
-            // Boost this thread to audio priority
-            Thread.current.threadPriority = 1.0
-            self.renderLoop()
-        }
-        renderThread?.qualityOfService = .userInteractive
-        renderThread?.start()
-    }
-
-    private func renderLoop() {
-        // 10 ms sleep = 480 samples @ 48kHz
-        let sleepNs: UInt64 = 10_000_000
-
-        while renderRunning {
-            let available = ringBuffer.available
-
-            // Update latency display every ~200ms
-            if Int.random(in: 0..<20) == 0 {
-                let ms = max(0, (available - 1) * 10)
-                DispatchQueue.main.async { self.latencyMs = ms }
-            }
-
-            if let pcmData = ringBuffer.pop() {
-                scheduleFrame(from: pcmData)
-            } else {
-                // Underrun: schedule silence to keep player clock running (no click)
-                scheduleFrame(silence: true)
-            }
-
-            Thread.sleep(forTimeInterval: 0.0095)   // ~9.5ms to stay ahead
-        }
-    }
-
-    private func scheduleFrame(from pcmData: Data? = nil, silence: Bool = false) {
-        let count = Int(frameCapacity)
-
-        guard let buf = AVAudioPCMBuffer(pcmFormat: floatFormat, frameCapacity: frameCapacity) else { return }
-        buf.frameLength = frameCapacity
-
-        guard let lCh = buf.floatChannelData?[0],
-              let rCh = buf.floatChannelData?[1] else { return }
-
-        if silence || pcmData == nil {
-            memset(lCh, 0, count * MemoryLayout<Float>.stride)
-            memset(rCh, 0, count * MemoryLayout<Float>.stride)
-        } else {
-            let frames = min(pcmData!.count / 4, count)
-            pcmData!.withUnsafeBytes { raw in
-                guard let int16Ptr = raw.bindMemory(to: Int16.self).baseAddress else { return }
-                for i in 0..<frames {
-                    lCh[i] = Float(int16Ptr[i * 2])     / 32768.0
-                    rCh[i] = Float(int16Ptr[i * 2 + 1]) / 32768.0
-                }
-                if frames < count {
-                    for i in frames..<count { lCh[i] = 0; rCh[i] = 0 }
-                }
-            }
-        }
-
-        player.scheduleBuffer(buf, completionHandler: nil)
-
-        if !player.isPlaying {
-            player.play()
-        }
-    }
-
-    // MARK: USB command channel
+    // MARK: - USB command send
 
     func sendUSBCommand(_ cmd: String) {
         activeTCPConnection?.send(content: cmd.data(using: .utf8),
                                   completion: .contentProcessed { _ in })
     }
 
-    // MARK: Public
+    // MARK: - Public
 
-    func setVolume(_ volume: Float) { player.volume = volume }
+    func setVolume(_ v: Float) { engine.mainMixerNode.outputVolume = v }
 
     func reset() {
-        player.stop()
-        while ringBuffer.pop() != nil {}    // flush ring buffer
+        // Drain ring buffer
+        _ = ring.available // just flush conceptually — new data overwrites
         isUSBConnected = false
         activeTCPConnection?.cancel()
         activeTCPConnection = nil
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-            self.player.play()
-        }
     }
 
-    // MARK: Notifications
+    // MARK: - Notifications
 
     @objc private func handleEngineChange(_: Notification) { restartEngine() }
     @objc private func handleRouteChange(_: Notification) {
-        // Reconnect session (Bluetooth / AirPods switch)
-        do { try AVAudioSession.sharedInstance().setActive(true) } catch {}
+        try? AVAudioSession.sharedInstance().setActive(true)
         restartEngine()
     }
 
     private func restartEngine() {
-        do {
-            engine.prepare()
-            try engine.start()
-            if !player.isPlaying { player.play() }
-        } catch { print("Engine restart error: \(error)") }
+        do { engine.prepare(); try engine.start() }
+        catch { print("Engine restart error: \(error)") }
     }
 }
