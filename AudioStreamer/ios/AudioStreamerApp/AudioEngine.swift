@@ -28,19 +28,21 @@ final class SampleRingBuffer {
         }
     }
 
-    // fills `out` with `needed` floats; returns true if fully satisfied
+    // fills `outL` and `outR` with `needed` floats
     @discardableResult
-    func pull(into out: UnsafeMutablePointer<Float>, count needed: Int) -> Bool {
+    func pull(intoL: UnsafeMutablePointer<Float>, intoR: UnsafeMutablePointer<Float>, count needed: Int) -> Bool {
         lock.lock(); defer { lock.unlock() }
-        let have = min(needed, count)
+        let have = min(needed, count / 2)
         for i in 0..<have {
-            out[i] = buf[readPos]
-            readPos = (readPos + 1) % cap
+            outL[i] = buf[readPos]
+            outR[i] = buf[(readPos + 1) % cap]
+            readPos = (readPos + 2) % cap
         }
-        count -= have
+        count -= (have * 2)
         if have < needed {
             // underrun: fill rest with silence
-            memset(out + have, 0, (needed - have) * MemoryLayout<Float>.stride)
+            memset(outL + have, 0, (needed - have) * MemoryLayout<Float>.stride)
+            memset(outR + have, 0, (needed - have) * MemoryLayout<Float>.stride)
             return false
         }
         return true
@@ -63,9 +65,8 @@ class AudioEngine: ObservableObject {
 
     private let sampleRate: Double = 48000
     private let channels:   Int    = 2
-    private let format = AVAudioFormat(
-        commonFormat: .pcmFormatFloat32,
-        sampleRate: 48000, channels: 2, interleaved: true)!
+    // Use standard format (Float32, non-interleaved) to prevent NSOSStatusErrorDomain Code=-10868
+    private let format = AVAudioFormat(standardFormatWithSampleRate: 48000, channels: 2)!
 
     private let ring = SampleRingBuffer(seconds: 0.15) // 150ms max buffer
     private var frameCounter = 0
@@ -97,16 +98,19 @@ class AudioEngine: ObservableObject {
     // MARK: - Engine (pull-based via AVAudioSourceNode)
 
     private func setupEngine() {
-        // AVAudioSourceNode calls this render block whenever the engine needs audio.
-        // No scheduling, no queue — just pull from the ring buffer RIGHT NOW.
         let node = AVAudioSourceNode(format: format) { [weak self] _, _, frameCount, abl -> OSStatus in
             guard let self else { return noErr }
-            let needed = Int(frameCount) * self.channels
-            // abl has one buffer (interleaved stereo Float32)
-            if let ptr = abl.pointee.mBuffers.mData?.assumingMemoryBound(to: Float.self) {
-                self.ring.pull(into: ptr, count: needed)
+            let needed = Int(frameCount)
+            
+            // Standard format is non-interleaved, so abl has 2 buffers (Left and Right)
+            let bufs = UnsafeMutableAudioBufferListPointer(abl)
+            if bufs.count >= 2,
+               let ptrL = bufs[0].mData?.assumingMemoryBound(to: Float.self),
+               let ptrR = bufs[1].mData?.assumingMemoryBound(to: Float.self) {
+                
+                self.ring.pull(intoL: ptrL, intoR: ptrR, count: needed)
             }
-            // Update latency display every ~200 render calls
+            
             self.frameCounter += 1
             if self.frameCounter % 200 == 0 {
                 let ms = (self.ring.available / self.channels) * 1000 / Int(self.sampleRate)
