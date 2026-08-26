@@ -41,8 +41,7 @@ class CameraManager: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleB
 
     // Persistent static CIContext and ColorSpace for Zero-Allocation, Ultra-Fast Encoding
     private let ciContext = CIContext(options: [
-        .useSoftwareRenderer: false,
-        .priorityRequestLow: false
+        .useSoftwareRenderer: false
     ])
     private let colorSpace = CGColorSpaceCreateDeviceRGB()
 

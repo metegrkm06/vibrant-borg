@@ -27,7 +27,6 @@ jobs:
       - name: Build App
         run: |
           cd IOSCameraStream
-          set -o pipefail
           xcodebuild clean build \
             -project IOSCameraStreamApp.xcodeproj \
             -scheme IOSCameraStreamApp \
