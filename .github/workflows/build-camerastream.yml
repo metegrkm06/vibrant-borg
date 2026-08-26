@@ -1,0 +1,58 @@
+name: Build IOSCameraStream IPA
+
+on:
+  push:
+    paths:
+      - 'IOSCameraStream/**'
+      - '.github/workflows/build-camerastream.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build Unsigned BonayCamera IPA
+    runs-on: macos-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Show Xcode Version
+        run: xcodebuild -version
+
+      - name: Generate Xcode Project
+        run: cd IOSCameraStream && python3 generate_project.py
+
+      - name: Build App
+        run: |
+          cd IOSCameraStream
+          set -o pipefail
+          xcodebuild clean build \
+            -project IOSCameraStreamApp.xcodeproj \
+            -scheme IOSCameraStreamApp \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath "$RUNNER_TEMP/build" \
+            CODE_SIGNING_ALLOWED=YES \
+            CODE_SIGNING_REQUIRED=YES \
+            CODE_SIGN_IDENTITY="-" \
+            AD_HOC_CODE_SIGNING_ALLOWED=YES \
+            ONLY_ACTIVE_ARCH=NO
+
+      - name: Package IPA
+        run: |
+          APP_PATH=$(find "$RUNNER_TEMP/build" -name "IOSCameraStreamApp.app" -type d | head -1)
+          echo "App: $APP_PATH"
+          mkdir -p Payload
+          cp -a "$APP_PATH" Payload/
+          chmod +x Payload/IOSCameraStreamApp.app/IOSCameraStreamApp
+          zip -r -y BonayCamera.ipa Payload
+          ls -lh BonayCamera.ipa
+
+      - name: Upload IPA Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: BonayCamera-ipa
+          path: BonayCamera.ipa
+          retention-days: 30
