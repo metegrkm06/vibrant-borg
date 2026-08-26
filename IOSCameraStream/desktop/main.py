@@ -88,7 +88,7 @@ class BonayCameraDesktopApp(ctk.CTk):
             self.preview_container,
             text="● OFF  |  0.0 FPS  |  0 ms  |  0x0  |  0 KB/s",
             font=ctk.CTkFont(family="Consolas", size=11, weight="bold"),
-            fg_color="rgba(0,0,0,0.6)",
+            fg_color="#181a20",
             text_color="#2ecc71",
             corner_radius=6,
             padx=8,
