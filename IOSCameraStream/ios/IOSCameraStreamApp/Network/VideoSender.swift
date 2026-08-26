@@ -270,7 +270,7 @@ class VideoSender: ObservableObject {
                     CameraManager.shared.cycleRotation()
                 }
             case "EXPOSURE":
-                if parts.count > 2, let bias = Float(parts[2]) {
+                if parts.count > 2, let bias = Double(parts[2]) {
                     CameraManager.shared.setExposureBias(bias)
                 }
             default:

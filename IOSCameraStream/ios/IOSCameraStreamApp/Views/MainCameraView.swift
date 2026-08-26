@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 struct MainCameraView: View {
     @ObservedObject var camera = CameraManager.shared
@@ -389,15 +390,19 @@ struct CameraSettingsSheet: View {
 
                 Section(header: Text("Overlays & Helpers")) {
                     Toggle("Rule of Thirds Grid", isOn: $camera.isGridVisible)
-                    Toggle("Keep Screen Awake Always", isOn: .constant(true))
-                        .disabled(true)
+                    HStack {
+                        Text("Screen Sleep")
+                        Spacer()
+                        Text("Always Awake")
+                            .foregroundColor(.green)
+                    }
                 }
 
                 Section(header: Text("Device Health")) {
                     HStack {
                         Text("Battery Level")
                         Spacer()
-                        Text("\(Int(UIDevice.current.batteryLevel * 100))%")
+                        Text("\(max(0, Int(UIDevice.current.batteryLevel * 100)))%")
                             .foregroundColor(.gray)
                     }
                     HStack {
