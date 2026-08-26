@@ -39,6 +39,13 @@ class CameraManager: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleB
     private let sessionQueue = DispatchQueue(label: "com.bonaycamera.sessionQueue", qos: .userInteractive)
     private let outputQueue = DispatchQueue(label: "com.bonaycamera.outputQueue", qos: .userInteractive)
 
+    // Persistent static CIContext and ColorSpace for Zero-Allocation, Ultra-Fast Encoding
+    private let ciContext = CIContext(options: [
+        .useSoftwareRenderer: false,
+        .priorityRequestLow: false
+    ])
+    private let colorSpace = CGColorSpace(name: CGColorSpace.sRGB)!
+
     // Published State for SwiftUI
     @Published var selectedPosition: CameraPositionType = .backWide
     @Published var availableCameras: [CameraPositionType] = [.backWide, .front]
@@ -52,12 +59,28 @@ class CameraManager: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleB
     @Published var isGridVisible: Bool = false
     @Published var isRunning: Bool = false
     @Published var focusPoint: CGPoint? = nil
+    @Published var exposureBias: Float = 0.0 // -2.0 to +2.0 EV
+    @Published var isNightMode: Bool = false
+
+    // Saved Per-Camera Orientations & Mirrors (remembers rotation per lens)
+    @Published var cameraRotations: [CameraPositionType: Int] = [
+        .front: 0,
+        .backWide: 0,
+        .backUltraWide: 0,
+        .backTelephoto: 0
+    ]
+    @Published var cameraMirrors: [CameraPositionType: Bool] = [
+        .front: true, // front camera mirrored by default like normal webcam
+        .backWide: false,
+        .backUltraWide: false,
+        .backTelephoto: false
+    ]
 
     // Encoder delegate
     var onFrameEncoded: ((Data, UInt64) -> Void)?
 
     // Frame compression quality (0.4 to 0.9)
-    var jpegQuality: CGFloat = 0.70
+    var jpegQuality: CGFloat = 0.65
 
     // Stats
     @Published var outputFPS: Double = 0.0
@@ -162,7 +185,10 @@ class CameraManager: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleB
         sessionQueue.async { [weak self] in
             guard let self = self, !self.session.isRunning else { return }
             self.session.startRunning()
-            DispatchQueue.main.async { self.isRunning = true }
+            DispatchQueue.main.async {
+                self.isRunning = true
+                UIApplication.shared.isIdleTimerDisabled = true
+            }
         }
     }
 
@@ -170,17 +196,26 @@ class CameraManager: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleB
         sessionQueue.async { [weak self] in
             guard let self = self, self.session.isRunning else { return }
             self.session.stopRunning()
-            DispatchQueue.main.async { self.isRunning = false }
+            DispatchQueue.main.async {
+                self.isRunning = false
+            }
         }
     }
 
-    // ─── Camera Switch & Controls ──────────────────────────────────────────────
+    // ─── Camera Switch & Saved Rotation Memory ─────────────────────────────────
 
     func switchCamera(to positionType: CameraPositionType) {
         sessionQueue.async { [weak self] in
             guard let self = self else { return }
             guard let newDevice = self.getDevice(for: positionType),
                   let newInput = try? AVCaptureDeviceInput(device: newDevice) else { return }
+
+            // 1. Save current rotation & mirror for previous camera
+            let prevPos = self.selectedPosition
+            DispatchQueue.main.async {
+                self.cameraRotations[prevPos] = self.rotationAngle
+                self.cameraMirrors[prevPos] = self.isMirrored
+            }
 
             self.session.beginConfiguration()
             if let oldInput = self.currentInput {
@@ -192,15 +227,21 @@ class CameraManager: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleB
                 self.currentInput = newInput
             }
 
-            self.updateConnectionOrientation()
-            self.applyFPS(self.currentFPS, on: newDevice)
-            self.session.commitConfiguration()
+            // 2. Restore saved rotation & mirror for new camera
+            let savedRot = self.cameraRotations[positionType] ?? 0
+            let savedMirror = self.cameraMirrors[positionType] ?? (positionType == .front)
 
             DispatchQueue.main.async {
                 self.selectedPosition = positionType
+                self.rotationAngle = savedRot
+                self.isMirrored = savedMirror
                 self.currentZoom = 1.0
                 self.isTorchOn = false
             }
+
+            self.updateConnectionOrientation(angle: savedRot, mirror: savedMirror)
+            self.applyFPS(self.currentFPS, on: newDevice)
+            self.session.commitConfiguration()
         }
     }
 
@@ -289,13 +330,13 @@ class CameraManager: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleB
             guard let self = self, let device = self.currentInput?.device else { return }
             do {
                 try device.lockForConfiguration()
-                if device.isFocusPointOfInterestSupported && device.isFocusModeSupported(.autoFocus) {
+                if device.isFocusPointOfInterestSupported && device.isFocusModeSupported(.continuousAutoFocus) {
                     device.focusPointOfInterest = point
-                    device.focusMode = .autoFocus
+                    device.focusMode = .continuousAutoFocus
                 }
-                if device.isExposurePointOfInterestSupported && device.isExposureModeSupported(.autoExpose) {
+                if device.isExposurePointOfInterestSupported && device.isExposureModeSupported(.continuousAutoExposure) {
                     device.exposurePointOfInterest = point
-                    device.exposureMode = .autoExpose
+                    device.exposureMode = .continuousAutoExposure
                 }
                 device.unlockForConfiguration()
                 DispatchQueue.main.async {
@@ -310,9 +351,25 @@ class CameraManager: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleB
         }
     }
 
+    func setExposureBias(_ bias: Float) {
+        sessionQueue.async { [weak self] in
+            guard let self = self, let device = self.currentInput?.device else { return }
+            do {
+                try device.lockForConfiguration()
+                let clamped = max(device.minExposureTargetBias, min(bias, device.maxExposureTargetBias))
+                device.setExposureTargetBias(clamped, completionHandler: nil)
+                device.unlockForConfiguration()
+                DispatchQueue.main.async { self.exposureBias = clamped }
+            } catch {
+                print("Failed to set exposure bias: \(error)")
+            }
+        }
+    }
+
     func toggleMirror() {
         DispatchQueue.main.async {
             self.isMirrored.toggle()
+            self.cameraMirrors[self.selectedPosition] = self.isMirrored
             self.sessionQueue.async { self.updateConnectionOrientation() }
         }
     }
@@ -320,14 +377,26 @@ class CameraManager: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleB
     func cycleRotation() {
         DispatchQueue.main.async {
             self.rotationAngle = (self.rotationAngle + 90) % 360
+            self.cameraRotations[self.selectedPosition] = self.rotationAngle
             self.sessionQueue.async { self.updateConnectionOrientation() }
         }
     }
 
-    private func updateConnectionOrientation() {
+    func resetRotation() {
+        DispatchQueue.main.async {
+            self.rotationAngle = 0
+            self.cameraRotations[self.selectedPosition] = 0
+            self.sessionQueue.async { self.updateConnectionOrientation() }
+        }
+    }
+
+    private func updateConnectionOrientation(angle: Int? = nil, mirror: Bool? = nil) {
         guard let conn = videoOutput.connection(with: .video) else { return }
+        let currentAngle = angle ?? rotationAngle
+        let currentMirror = mirror ?? isMirrored
+
         if conn.isVideoOrientationSupported {
-            switch rotationAngle {
+            switch currentAngle {
             case 90:  conn.videoOrientation = .landscapeRight
             case 180: conn.videoOrientation = .portraitUpsideDown
             case 270: conn.videoOrientation = .landscapeLeft
@@ -335,7 +404,7 @@ class CameraManager: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleB
             }
         }
         if conn.isVideoMirroringSupported {
-            conn.isVideoMirrored = isMirrored
+            conn.isVideoMirrored = currentMirror
         }
     }
 
@@ -344,15 +413,17 @@ class CameraManager: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleB
     func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
         guard let imageBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
 
-        // Fast JPEG encoding from CVPixelBuffer
+        // Ultra-Fast Zero-Allocation JPEG Encoding via Persistent CIContext
         let ciImage = CIImage(cvPixelBuffer: imageBuffer)
-        let context = CIContext(options: [.useSoftwareRenderer: false])
-        guard let colorSpace = CGColorSpace(name: CGColorSpace.sRGB),
-              let jpegData = context.jpegRepresentation(of: ciImage, colorSpace: colorSpace, options: [kCGImageDestinationLossyCompressionQuality as CIImageRepresentationOption: jpegQuality]) else {
+        guard let jpegData = ciContext.jpegRepresentation(
+            of: ciImage,
+            colorSpace: colorSpace,
+            options: [kCGImageDestinationLossyCompressionQuality as CIImageRepresentationOption: jpegQuality]
+        ) else {
             return
         }
 
-        let tsNs = UInt64(time(nil)) * 1_000_000_000 + UInt64(clock()) // timestamp in ns
+        let tsNs = UInt64(time(nil)) * 1_000_000_000 + UInt64(clock())
         onFrameEncoded?(jpegData, tsNs)
 
         // Measure output stats

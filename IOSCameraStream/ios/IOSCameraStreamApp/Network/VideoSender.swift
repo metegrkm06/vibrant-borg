@@ -16,12 +16,16 @@ class VideoSender: ObservableObject {
     private var targetIP: String?
     private let sendQueue = DispatchQueue(label: "com.bonaycamera.sendQueue", qos: .userInteractive)
 
+    // Backlog Protection: ensures zero delay by dropping intermediate frames if sender is busy
+    private var isSendingFrame = false
+    private let sendLock = NSLock()
+
     init() {
         startTCPListener()
         setupFrameEncodingHook()
     }
 
-    // ─── Direct USB Cable Mode (TCP Listener on Port 5003) ──────────────────────
+    // ─── Direct USB Cable Mode & Wi-Fi TCP Listener (Port 5003) ────────────────
 
     func startTCPListener() {
         guard tcpListener == nil else { return }
@@ -43,11 +47,14 @@ class VideoSender: ObservableObject {
         activeTCPConnection = conn
 
         conn.start(queue: sendQueue)
+
+        // Default to Wi-Fi until handshake verifies USB
         DispatchQueue.main.async {
             self.isConnected = true
-            self.isUSBMode = true
-            self.connectedPCName = "PC (Direct USB Cable)"
+            self.isUSBMode = false
+            self.connectedPCName = "PC"
             CameraManager.shared.start()
+            UIApplication.shared.isIdleTimerDisabled = true
         }
 
         readIncomingCommands(conn)
@@ -71,7 +78,11 @@ class VideoSender: ObservableObject {
                     self?.isUSBMode = false
                     self?.connectedPCName = pcName
                     CameraManager.shared.start()
+                    UIApplication.shared.isIdleTimerDisabled = true
                 }
+                // Send Wi-Fi handshake
+                let handshake = "CMD|HANDSHAKE|WIFI|\(UIDevice.current.name)\n".data(using: .utf8)!
+                tcpConn.send(content: handshake, completion: .contentProcessed { _ in })
                 self?.readIncomingCommands(tcpConn)
             case .failed(let err):
                 print("TCP connection failed: \(err)")
@@ -102,7 +113,7 @@ class VideoSender: ObservableObject {
         }
     }
 
-    // ─── Frame Transmission ───────────────────────────────────────────────────
+    // ─── Zero-Delay Frame Transmission (Backlog-Free) ─────────────────────────
 
     private func setupFrameEncodingHook() {
         CameraManager.shared.onFrameEncoded = { [weak self] jpegData, tsNs in
@@ -112,6 +123,15 @@ class VideoSender: ObservableObject {
     }
 
     private func sendFrame(_ data: Data, timestampNs: UInt64) {
+        sendLock.lock()
+        if isSendingFrame {
+            // Drop late frame immediately to prevent queuing lag
+            sendLock.unlock()
+            return
+        }
+        isSendingFrame = true
+        sendLock.unlock()
+
         // Packet Header: [Magic 4B: 'BNCF'][Length 4B: BigEndian][TimestampNs 8B: BigEndian]
         let magic = "BNCF".data(using: .utf8)!
         var length = UInt32(data.count).bigEndian
@@ -126,13 +146,24 @@ class VideoSender: ObservableObject {
 
         // 1. If USB or TCP active: stream full packet over TCP
         if let tcp = activeTCPConnection {
-            tcp.send(content: fullPacket, completion: .contentProcessed { _ in })
+            tcp.send(content: fullPacket, completion: .contentProcessed { [weak self] _ in
+                self?.sendLock.lock()
+                self?.isSendingFrame = false
+                self?.sendLock.unlock()
+            })
             return
         }
 
         // 2. If Wi-Fi UDP active: send fragmented packets
         if let udp = udpConnection {
             sendUDPFragments(data, timestampNs: timestampNs, over: udp)
+            sendLock.lock()
+            isSendingFrame = false
+            sendLock.unlock()
+        } else {
+            sendLock.lock()
+            isSendingFrame = false
+            sendLock.unlock()
         }
     }
 
@@ -185,6 +216,16 @@ class VideoSender: ObservableObject {
         let action = parts[1]
         DispatchQueue.main.async {
             switch action {
+            case "HANDSHAKE":
+                if parts.count > 2 {
+                    if parts[2] == "USB" {
+                        self.isUSBMode = true
+                        self.connectedPCName = "PC (Direct USB Cable)"
+                    } else if parts[2] == "WIFI" {
+                        self.isUSBMode = false
+                        self.connectedPCName = parts.count > 3 ? parts[3] : "PC (Wi-Fi)"
+                    }
+                }
             case "CAM":
                 if parts.count > 2 {
                     let camType = parts[2]
@@ -222,7 +263,15 @@ class VideoSender: ObservableObject {
             case "MIRROR":
                 CameraManager.shared.toggleMirror()
             case "ROTATE":
-                CameraManager.shared.cycleRotation()
+                if parts.count > 2 && parts[2] == "RESET" {
+                    CameraManager.shared.resetRotation()
+                } else {
+                    CameraManager.shared.cycleRotation()
+                }
+            case "EXPOSURE":
+                if parts.count > 2, let bias = Float(parts[2]) {
+                    CameraManager.shared.setExposureBias(bias)
+                }
             default:
                 break
             }

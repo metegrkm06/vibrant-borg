@@ -14,6 +14,9 @@ struct MainCameraView: View {
             // ── 1. Live Camera Preview Layer ──
             CameraPreviewView(camera: camera)
                 .edgesIgnoringSafeArea(.all)
+                .onAppear {
+                    UIApplication.shared.isIdleTimerDisabled = true
+                }
 
             // ── 2. Rule of Thirds Grid Overlay ──
             if camera.isGridVisible {
@@ -37,7 +40,7 @@ struct MainCameraView: View {
             // ── 4. Main HUD Controls ──
             VStack {
                 // ── Top Bar ──
-                HStack(spacing: 12) {
+                HStack(spacing: 10) {
                     // Exit / Disconnect Button
                     Button(action: {
                         sender.disconnect()
@@ -62,7 +65,7 @@ struct MainCameraView: View {
                         Circle()
                             .fill(sender.isConnected ? Color.green : Color.orange)
                             .frame(width: 8, height: 8)
-                        Text(sender.isUSBMode ? "⚡ USB" : "🌐 Wi-Fi")
+                        Text(sender.isUSBMode ? "⚡ USB Cable" : "🌐 Wi-Fi")
                             .font(.system(size: 12, weight: .bold))
                         Text(String(format: "%.0f FPS", camera.outputFPS))
                             .font(.system(size: 11, weight: .medium, design: .monospaced))
@@ -148,17 +151,17 @@ struct MainCameraView: View {
                     .background(Color.black.opacity(0.6))
                     .cornerRadius(22)
 
-                    // Action Toolbar: Mirror, Flip Camera, Rotate
-                    HStack(spacing: 24) {
+                    // Action Toolbar: Mirror, Flip Camera, Rotate, Reset
+                    HStack(spacing: 20) {
                         // Mirror Toggle
                         Button(action: { camera.toggleMirror() }) {
                             VStack(spacing: 3) {
                                 Image(systemName: "arrow.left.and.right.righttriangle.left.righttriangle.right.fill")
-                                    .font(.system(size: 18))
+                                    .font(.system(size: 16))
                                 Text("Mirror")
-                                    .font(.system(size: 10, weight: .bold))
+                                    .font(.system(size: 9, weight: .bold))
                             }
-                            .frame(width: 54, height: 54)
+                            .frame(width: 50, height: 50)
                             .background(camera.isMirrored ? Color.blue.opacity(0.8) : Color.black.opacity(0.6))
                             .foregroundColor(.white)
                             .clipShape(Circle())
@@ -178,24 +181,27 @@ struct MainCameraView: View {
                                 Text(camera.selectedPosition == .front ? "Back" : "Front")
                                     .font(.system(size: 10, weight: .bold))
                             }
-                            .frame(width: 64, height: 64)
+                            .frame(width: 62, height: 62)
                             .background(Color.blue)
                             .foregroundColor(.white)
                             .clipShape(Circle())
                         }
 
-                        // Rotation / Upside Down Fix
+                        // Rotation / Upside Down Fix (Tap to cycle, Long press to reset)
                         Button(action: { camera.cycleRotation() }) {
                             VStack(spacing: 3) {
                                 Image(systemName: "rotate.right.fill")
-                                    .font(.system(size: 18))
+                                    .font(.system(size: 16))
                                 Text("\(camera.rotationAngle)°")
-                                    .font(.system(size: 10, weight: .bold))
+                                    .font(.system(size: 9, weight: .bold))
                             }
-                            .frame(width: 54, height: 54)
+                            .frame(width: 50, height: 50)
                             .background(camera.rotationAngle != 0 ? Color.orange.opacity(0.8) : Color.black.opacity(0.6))
                             .foregroundColor(.white)
                             .clipShape(Circle())
+                        }
+                        .onLongPressGesture {
+                            camera.resetRotation()
                         }
                     }
                     .padding(.bottom, 16)
@@ -213,7 +219,7 @@ struct MainCameraView: View {
                         Text("BonayCamera Streaming...")
                             .font(.headline)
                             .foregroundColor(.white)
-                        Text("Screen is black to save battery & reduce heat.\nTap anywhere to wake screen.")
+                        Text("Screen is black to save battery & prevent heat.\nTap anywhere to wake screen.")
                             .font(.caption)
                             .multilineTextAlignment(.center)
                             .foregroundColor(.gray)
@@ -226,6 +232,9 @@ struct MainCameraView: View {
         }
         .sheet(isPresented: $showSettings) {
             CameraSettingsSheet(camera: camera)
+        }
+        .onAppear {
+            UIApplication.shared.isIdleTimerDisabled = true
         }
     }
 }
@@ -256,12 +265,10 @@ struct GridView: View {
             Path { path in
                 let w = geo.size.width
                 let h = geo.size.height
-                // Vertical lines
                 path.move(to: CGPoint(x: w / 3, y: 0))
                 path.addLine(to: CGPoint(x: w / 3, y: h))
                 path.move(to: CGPoint(x: w * 2 / 3, y: 0))
                 path.addLine(to: CGPoint(x: w * 2 / 3, y: h))
-                // Horizontal lines
                 path.move(to: CGPoint(x: 0, y: h / 3))
                 path.addLine(to: CGPoint(x: w, y: h / 3))
                 path.move(to: CGPoint(x: 0, y: h * 2 / 3))
@@ -306,19 +313,74 @@ struct CameraSettingsSheet: View {
                             Text("\(Int(camera.jpegQuality * 100))%")
                                 .foregroundColor(.gray)
                         }
-                        Slider(value: $camera.jpegQuality, in: 0.4...0.95, step: 0.05)
+                        Slider(value: $camera.jpegQuality, in: 0.4...0.90, step: 0.05)
                     }
+                }
+
+                Section(header: Text("Exposure & Lighting")) {
+                    VStack(alignment: .leading) {
+                        HStack {
+                            Text("Exposure Bias (EV)")
+                            Spacer()
+                            Text(String(format: "%.1f EV", camera.exposureBias))
+                                .foregroundColor(.gray)
+                        }
+                        Slider(value: Binding(
+                            get: { camera.exposureBias },
+                            set: { camera.setExposureBias($0) }
+                        ), in: -2.0...2.0, step: 0.2)
+                    }
+
+                    if camera.selectedPosition != .front {
+                        VStack(alignment: .leading) {
+                            HStack {
+                                Text("Torch Brightness")
+                                Spacer()
+                                Text("\(Int(camera.torchLevel * 100))%")
+                                    .foregroundColor(.gray)
+                            }
+                            Slider(value: $camera.torchLevel, in: 0.1...1.0, step: 0.1)
+                                .onChange(of: camera.torchLevel) { lvl in
+                                    if camera.isTorchOn {
+                                        camera.toggleTorch(on: true, level: lvl)
+                                    }
+                                }
+                        }
+                    }
+                }
+
+                Section(header: Text("Per-Camera Memory")) {
+                    HStack {
+                        Text("Current Lens")
+                        Spacer()
+                        Text(camera.selectedPosition.rawValue)
+                            .foregroundColor(.blue)
+                    }
+                    HStack {
+                        Text("Saved Rotation")
+                        Spacer()
+                        Text("\(camera.rotationAngle)°")
+                            .foregroundColor(.gray)
+                    }
+                    HStack {
+                        Text("Saved Mirror")
+                        Spacer()
+                        Text(camera.isMirrored ? "Mirrored" : "Normal")
+                            .foregroundColor(.gray)
+                    }
+                    Button("Reset Rotation to 0°") {
+                        camera.resetRotation()
+                    }
+                    .foregroundColor(.orange)
                 }
 
                 Section(header: Text("Overlays & Helpers")) {
                     Toggle("Rule of Thirds Grid", isOn: $camera.isGridVisible)
-                    Toggle("Mirror Video (Horizontal Flip)", isOn: $camera.isMirrored)
-                        .onChange(of: camera.isMirrored) { _ in
-                            camera.toggleMirror()
-                        }
+                    Toggle("Keep Screen Awake Always", isOn: .constant(true))
+                        .disabled(true)
                 }
 
-                Section(header: Text("Device Status")) {
+                Section(header: Text("Device Health")) {
                     HStack {
                         Text("Battery Level")
                         Spacer()

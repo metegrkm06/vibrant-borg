@@ -160,6 +160,9 @@ struct ConnectionView: View {
                     discovery.connect(toIP: cleaned)
                 }
             }
+            .onAppear {
+                UIApplication.shared.isIdleTimerDisabled = true
+            }
         }
     }
 }

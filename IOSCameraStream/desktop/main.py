@@ -100,20 +100,23 @@ class BonayCameraDesktopApp(ctk.CTk):
         action_bar = ctk.CTkFrame(left_panel, fg_color="transparent")
         action_bar.grid(row=1, column=0, padx=10, pady=(4, 10), sticky="ew")
 
-        self.btn_snapshot = ctk.CTkButton(action_bar, text="📸 Snapshot", width=100, command=self._on_snapshot)
-        self.btn_snapshot.pack(side="left", padx=4)
+        self.btn_snapshot = ctk.CTkButton(action_bar, text="📸 Snapshot", width=90, command=self._on_snapshot)
+        self.btn_snapshot.pack(side="left", padx=3)
 
-        self.btn_record = ctk.CTkButton(action_bar, text="⏺ Record", width=95, fg_color="#e74c3c", hover_color="#c0392b", command=self._on_toggle_record)
-        self.btn_record.pack(side="left", padx=4)
+        self.btn_record = ctk.CTkButton(action_bar, text="⏺ Record", width=85, fg_color="#e74c3c", hover_color="#c0392b", command=self._on_toggle_record)
+        self.btn_record.pack(side="left", padx=3)
 
-        self.btn_mirror = ctk.CTkButton(action_bar, text="🪞 Mirror", width=85, fg_color="#34495e", hover_color="#2c3e50", command=self._on_toggle_mirror)
-        self.btn_mirror.pack(side="left", padx=4)
+        self.btn_mirror = ctk.CTkButton(action_bar, text="🪞 Mirror", width=80, fg_color="#34495e", hover_color="#2c3e50", command=self._on_toggle_mirror)
+        self.btn_mirror.pack(side="left", padx=3)
 
-        self.btn_rotate = ctk.CTkButton(action_bar, text="🔄 Rotate 0°", width=105, fg_color="#34495e", hover_color="#2c3e50", command=self._on_cycle_rotation)
-        self.btn_rotate.pack(side="left", padx=4)
+        self.btn_rotate = ctk.CTkButton(action_bar, text="🔄 Rotate 0°", width=100, fg_color="#34495e", hover_color="#2c3e50", command=self._on_cycle_rotation)
+        self.btn_rotate.pack(side="left", padx=3)
 
-        self.btn_fullscreen = ctk.CTkButton(action_bar, text="⛶ Fullscreen", width=100, fg_color="#34495e", hover_color="#2c3e50", command=self._toggle_fullscreen)
-        self.btn_fullscreen.pack(side="right", padx=4)
+        self.btn_reset_rot = ctk.CTkButton(action_bar, text="Reset Rot", width=75, fg_color="#d35400", hover_color="#ba4a00", command=self._on_reset_rotation)
+        self.btn_reset_rot.pack(side="left", padx=3)
+
+        self.btn_fullscreen = ctk.CTkButton(action_bar, text="⛶ Fullscreen", width=95, fg_color="#34495e", hover_color="#2c3e50", command=self._toggle_fullscreen)
+        self.btn_fullscreen.pack(side="right", padx=3)
 
         # ═════════════════════════════════════════════════════════════════════════
         # RIGHT PANEL: Connection Status, Remote Controls, Virtual Cam Settings
@@ -207,8 +210,14 @@ class BonayCameraDesktopApp(ctk.CTk):
         self.fps_menu.set("60 FPS")
         self.fps_menu.grid(row=1, column=1, padx=(5, 0), sticky="ew")
 
+        # Exposure Bias Slider
+        ctk.CTkLabel(ctrl_box, text="Exposure Bias (Brightness EV):", text_color="gray", font=ctk.CTkFont(size=12)).pack(anchor="w", padx=15, pady=(8, 2))
+        self.exposure_slider = ctk.CTkSlider(ctrl_box, from_=-2.0, to=2.0, number_of_steps=20, command=self._on_exposure_slider)
+        self.exposure_slider.set(0.0)
+        self.exposure_slider.pack(fill="x", padx=15, pady=(0, 4))
+
         # Remote Zoom Slider
-        ctk.CTkLabel(ctrl_box, text="Smooth Zoom Slider:", text_color="gray", font=ctk.CTkFont(size=12)).pack(anchor="w", padx=15, pady=(8, 2))
+        ctk.CTkLabel(ctrl_box, text="Smooth Zoom Slider:", text_color="gray", font=ctk.CTkFont(size=12)).pack(anchor="w", padx=15, pady=(4, 2))
         self.zoom_slider = ctk.CTkSlider(ctrl_box, from_=0.5, to=5.0, number_of_steps=45, command=self._on_zoom_slider)
         self.zoom_slider.set(1.0)
         self.zoom_slider.pack(fill="x", padx=15, pady=(0, 12))
@@ -254,6 +263,13 @@ class BonayCameraDesktopApp(ctk.CTk):
                         sock = self.usbmux.connect_device(dev["DeviceID"], port=VIDEO_TCP_PORT, timeout=2.0)
                         self.is_usb_active = True
                         self.network.active_cmd_sock = sock
+
+                        # Send USB Handshake so the phone knows this is direct USB cable mode
+                        try:
+                            sock.sendall(b"CMD|HANDSHAKE|USB\n")
+                        except Exception:
+                            pass
+
                         self.after(0, lambda d=dev: self.on_usb_connected(d))
 
                         # Ingest video frames directly from USB tunnel
@@ -290,6 +306,7 @@ class BonayCameraDesktopApp(ctk.CTk):
             self.status_title.configure(text="🌐 Streaming via Wi-Fi", text_color="#2ecc71")
             self.status_sub.configure(text=f"Device: {name} ({ip})")
             self.no_signal_label.place_forget()
+            self.network.send_command("CMD|HANDSHAKE|WIFI|" + socket.gethostname(), target_ip=ip)
 
     def on_wifi_disconnected(self, ip):
         if not self.is_usb_active:
@@ -318,6 +335,9 @@ class BonayCameraDesktopApp(ctk.CTk):
         fps_val = choice.split()[0]
         self._send_cmd(f"CMD|FPS|{fps_val}")
 
+    def _on_exposure_slider(self, val):
+        self._send_cmd(f"CMD|EXPOSURE|{val:.2f}")
+
     def _on_zoom_slider(self, val):
         self._send_cmd(f"CMD|ZOOM|{val:.2f}")
 
@@ -329,6 +349,11 @@ class BonayCameraDesktopApp(ctk.CTk):
         deg = (self.receiver.rotation_degrees + 90) % 360
         self.receiver.rotation_degrees = deg
         self.btn_rotate.configure(text=f"🔄 Rotate {deg}°")
+
+    def _on_reset_rotation(self):
+        self.receiver.rotation_degrees = 0
+        self.btn_rotate.configure(text="🔄 Rotate 0°")
+        self._send_cmd("CMD|ROTATE|RESET")
 
     def _on_snapshot(self):
         path = self.receiver.take_snapshot()
