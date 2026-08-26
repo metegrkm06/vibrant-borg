@@ -37,7 +37,7 @@ jobs:
             CODE_SIGNING_REQUIRED=YES \
             CODE_SIGN_IDENTITY="-" \
             AD_HOC_CODE_SIGNING_ALLOWED=YES \
-            ONLY_ACTIVE_ARCH=NO
+            ONLY_ACTIVE_ARCH=NO > build.log 2>&1 || (cat build.log | grep -i "error:" | head -30; exit 1)
 
       - name: Package IPA
         run: |
