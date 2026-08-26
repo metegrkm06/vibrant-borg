@@ -44,7 +44,7 @@ class CameraManager: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleB
         .useSoftwareRenderer: false,
         .priorityRequestLow: false
     ])
-    private let colorSpace = CGColorSpace(name: CGColorSpace.sRGB)!
+    private let colorSpace = CGColorSpaceCreateDeviceRGB()
 
     // Published State for SwiftUI
     @Published var selectedPosition: CameraPositionType = .backWide

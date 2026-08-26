@@ -313,7 +313,7 @@ struct CameraSettingsSheet: View {
                             Text("\(Int(camera.jpegQuality * 100))%")
                                 .foregroundColor(.gray)
                         }
-                        Slider(value: $camera.jpegQuality, in: 0.4...0.90, step: 0.05)
+                        Slider(value: $camera.jpegQuality, in: CGFloat(0.4)...CGFloat(0.90), step: 0.05)
                     }
                 }
 
@@ -328,7 +328,7 @@ struct CameraSettingsSheet: View {
                         Slider(value: Binding(
                             get: { camera.exposureBias },
                             set: { camera.setExposureBias($0) }
-                        ), in: -2.0...2.0, step: 0.2)
+                        ), in: Float(-2.0)...Float(2.0), step: 0.2)
                     }
 
                     if camera.selectedPosition != .front {
@@ -339,7 +339,7 @@ struct CameraSettingsSheet: View {
                                 Text("\(Int(camera.torchLevel * 100))%")
                                     .foregroundColor(.gray)
                             }
-                            Slider(value: $camera.torchLevel, in: 0.1...1.0, step: 0.1)
+                            Slider(value: $camera.torchLevel, in: Float(0.1)...Float(1.0), step: 0.1)
                                 .onChange(of: camera.torchLevel) { lvl in
                                     if camera.isTorchOn {
                                         camera.toggleTorch(on: true, level: lvl)
