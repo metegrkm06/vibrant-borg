@@ -1,6 +1,7 @@
 import Foundation
 import Network
 import Combine
+import UIKit
 
 class VideoSender: ObservableObject {
     static let shared = VideoSender()
