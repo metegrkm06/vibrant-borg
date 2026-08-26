@@ -53,14 +53,14 @@ class CameraManager: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleB
     @Published var currentResolution: ResolutionPreset = .p1080
     @Published var currentZoom: CGFloat = 1.0
     @Published var isTorchOn: Bool = false
-    @Published var torchLevel: Float = 1.0
+    @Published var torchLevel: Double = 1.0
     @Published var isMirrored: Bool = false
     @Published var rotationAngle: Int = 0 // 0, 90, 180 (upside down fix), 270
     @Published var isGridVisible: Bool = false
     @Published var isRunning: Bool = false
     @Published var focusPoint: CGPoint? = nil
-    @Published var exposureBias: Float = 0.0 // -2.0 to +2.0 EV
-    @Published var isNightMode: Bool = false
+    @Published var exposureBias: Double = 0.0 // -2.0 to +2.0 EV
+    @Published var jpegQuality: Double = 0.65 // 0.4 to 0.9
 
     // Saved Per-Camera Orientations & Mirrors (remembers rotation per lens)
     @Published var cameraRotations: [CameraPositionType: Int] = [
@@ -78,9 +78,6 @@ class CameraManager: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleB
 
     // Encoder delegate
     var onFrameEncoded: ((Data, UInt64) -> Void)?
-
-    // Frame compression quality (0.4 to 0.9)
-    var jpegQuality: CGFloat = 0.65
 
     // Stats
     @Published var outputFPS: Double = 0.0
@@ -302,14 +299,18 @@ class CameraManager: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleB
         }
     }
 
-    func toggleTorch(on: Bool? = nil, level: Float = 1.0) {
+    func setZoom(_ factor: Double) {
+        setZoom(CGFloat(factor))
+    }
+
+    func toggleTorch(on: Bool? = nil, level: Double = 1.0) {
         sessionQueue.async { [weak self] in
             guard let self = self, let device = self.currentInput?.device, device.hasTorch else { return }
             do {
                 try device.lockForConfiguration()
                 let target = on ?? !device.isTorchActive
                 if target {
-                    let lvl = max(0.1, min(level, 1.0))
+                    let lvl = max(0.1, min(Float(level), 1.0))
                     try device.setTorchModeOn(level: lvl)
                 } else {
                     device.torchMode = .off
@@ -351,13 +352,13 @@ class CameraManager: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleB
         }
     }
 
-    func setExposureBias(_ bias: Float) {
+    func setExposureBias(_ bias: Double) {
         sessionQueue.async { [weak self] in
             guard let self = self, let device = self.currentInput?.device else { return }
             do {
                 try device.lockForConfiguration()
-                let clamped = max(device.minExposureTargetBias, min(bias, device.maxExposureTargetBias))
-                device.setExposureTargetBias(clamped, completionHandler: nil)
+                let clamped = max(Double(device.minExposureTargetBias), min(bias, Double(device.maxExposureTargetBias)))
+                device.setExposureTargetBias(Float(clamped), completionHandler: nil)
                 device.unlockForConfiguration()
                 DispatchQueue.main.async { self.exposureBias = clamped }
             } catch {
@@ -418,7 +419,7 @@ class CameraManager: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleB
         guard let jpegData = ciContext.jpegRepresentation(
             of: ciImage,
             colorSpace: colorSpace,
-            options: [kCGImageDestinationLossyCompressionQuality as CIImageRepresentationOption: jpegQuality]
+            options: [kCGImageDestinationLossyCompressionQuality as CIImageRepresentationOption: CGFloat(jpegQuality)]
         ) else {
             return
         }

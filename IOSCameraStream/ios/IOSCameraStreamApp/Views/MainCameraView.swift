@@ -152,7 +152,7 @@ struct MainCameraView: View {
                     .cornerRadius(22)
 
                     // Action Toolbar: Mirror, Flip Camera, Rotate, Reset
-                    HStack(spacing: 20) {
+                    HStack(spacing: 16) {
                         // Mirror Toggle
                         Button(action: { camera.toggleMirror() }) {
                             VStack(spacing: 3) {
@@ -181,13 +181,13 @@ struct MainCameraView: View {
                                 Text(camera.selectedPosition == .front ? "Back" : "Front")
                                     .font(.system(size: 10, weight: .bold))
                             }
-                            .frame(width: 62, height: 62)
+                            .frame(width: 60, height: 60)
                             .background(Color.blue)
                             .foregroundColor(.white)
                             .clipShape(Circle())
                         }
 
-                        // Rotation / Upside Down Fix (Tap to cycle, Long press to reset)
+                        // Rotation / Upside Down Fix (Tap to cycle rotation)
                         Button(action: { camera.cycleRotation() }) {
                             VStack(spacing: 3) {
                                 Image(systemName: "rotate.right.fill")
@@ -200,8 +200,21 @@ struct MainCameraView: View {
                             .foregroundColor(.white)
                             .clipShape(Circle())
                         }
-                        .onLongPressGesture {
-                            camera.resetRotation()
+
+                        // Reset Rotation to 0°
+                        if camera.rotationAngle != 0 {
+                            Button(action: { camera.resetRotation() }) {
+                                VStack(spacing: 3) {
+                                    Image(systemName: "arrow.uturn.backward.circle.fill")
+                                        .font(.system(size: 16))
+                                    Text("Reset")
+                                        .font(.system(size: 9, weight: .bold))
+                                }
+                                .frame(width: 46, height: 46)
+                                .background(Color.red.opacity(0.75))
+                                .foregroundColor(.white)
+                                .clipShape(Circle())
+                            }
                         }
                     }
                     .padding(.bottom, 16)
@@ -313,7 +326,7 @@ struct CameraSettingsSheet: View {
                             Text("\(Int(camera.jpegQuality * 100))%")
                                 .foregroundColor(.gray)
                         }
-                        Slider(value: $camera.jpegQuality, in: CGFloat(0.4)...CGFloat(0.90), step: 0.05)
+                        Slider(value: $camera.jpegQuality, in: 0.4...0.90, step: 0.05)
                     }
                 }
 
@@ -328,7 +341,7 @@ struct CameraSettingsSheet: View {
                         Slider(value: Binding(
                             get: { camera.exposureBias },
                             set: { camera.setExposureBias($0) }
-                        ), in: Float(-2.0)...Float(2.0), step: 0.2)
+                        ), in: -2.0...2.0, step: 0.2)
                     }
 
                     if camera.selectedPosition != .front {
@@ -339,7 +352,7 @@ struct CameraSettingsSheet: View {
                                 Text("\(Int(camera.torchLevel * 100))%")
                                     .foregroundColor(.gray)
                             }
-                            Slider(value: $camera.torchLevel, in: Float(0.1)...Float(1.0), step: 0.1)
+                            Slider(value: $camera.torchLevel, in: 0.1...1.0, step: 0.1)
                                 .onChange(of: camera.torchLevel) { lvl in
                                     if camera.isTorchOn {
                                         camera.toggleTorch(on: true, level: lvl)
